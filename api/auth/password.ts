@@ -87,7 +87,7 @@ export function createRegisterHandler() {
       clientId: "local",
     });
 
-    const cookieOpts = getSessionCookieOptions(c.req.raw.headers);
+    const cookieOpts = getSessionCookieOptions(c.req.raw);
     setCookie(c, Session.cookieName, token, {
       ...cookieOpts,
       maxAge: Session.maxAgeMs / 1000,
@@ -127,7 +127,7 @@ export function createLoginHandler() {
       clientId: "local",
     });
 
-    const cookieOpts = getSessionCookieOptions(c.req.raw.headers);
+    const cookieOpts = getSessionCookieOptions(c.req.raw);
     setCookie(c, Session.cookieName, token, {
       ...cookieOpts,
       maxAge: Session.maxAgeMs / 1000,
