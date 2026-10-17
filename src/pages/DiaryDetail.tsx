@@ -722,6 +722,10 @@ export default function DiaryDetail() {
   const diaryStyle = diary.style ?? "温柔真实";
   const diaryContent = diary.content ?? "";
   const paragraphs = diaryContent.split("\n").filter((p) => p.trim().length > 0);
+  // A pending row is already being generated in the background; the query
+  // above polls every 3s until the status changes. Regenerating while pending
+  // would just be rejected by the server, so the button is disabled instead.
+  const isPending = diary.generationStatus === "pending";
 
   return (
     <div className="relative min-h-[100dvh]">
@@ -860,7 +864,11 @@ export default function DiaryDetail() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.5, duration: 0.4, ease: EASE_PRIMARY }}
             >
-              这篇日记还没有内容...
+              {diary.generationError
+                ? `上次生成失败：${diary.generationError}`
+                : isPending
+                  ? "正在生成中，稍等片刻..."
+                  : "这篇日记还没有内容..."}
             </motion.p>
           )}
         </div>
@@ -874,13 +882,22 @@ export default function DiaryDetail() {
 
       {/* ── Regenerate Action ── */}
       <motion.section
-        className="flex justify-center px-5 pt-4 pb-10"
+        className="flex flex-col items-center gap-3 px-5 pt-4 pb-10"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.6, duration: 0.3 }}
       >
+        {isPending && (
+          <p
+            className="text-center font-ui text-xs"
+            style={{ color: "var(--text-tertiary)" }}
+            aria-live="polite"
+          >
+            正在生成中，完成后会自动刷新
+          </p>
+        )}
         <motion.button
-          className="inline-flex items-center gap-2 rounded-xl px-6 py-3 font-ui text-sm font-medium"
+          className="inline-flex items-center gap-2 rounded-xl px-6 py-3 font-ui text-sm font-medium disabled:opacity-50"
           style={{
             color: "var(--accent)",
             backgroundColor: "transparent",
@@ -888,10 +905,10 @@ export default function DiaryDetail() {
           whileHover={{ backgroundColor: "var(--accent-soft)" }}
           whileTap={{ scale: 0.96, backgroundColor: "var(--accent-soft)" }}
           onClick={handleRegenerate}
-          disabled={isRegenerating}
+          disabled={isRegenerating || isPending}
           aria-live="polite"
         >
-          {isRegenerating ? (
+          {isRegenerating || isPending ? (
             <>
               <motion.span
                 animate={{ rotate: 360 }}

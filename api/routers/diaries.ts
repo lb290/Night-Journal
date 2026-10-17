@@ -16,6 +16,7 @@ import {
 } from "../queries/diaries";
 import { findAiSettingsByUserId } from "../queries/ai-settings";
 import { generateDiaryForDate } from "../services/diary";
+import { PENDING_TIMEOUT_MS } from "../lib/scheduler";
 
 export const diariesRouter = createRouter({
   // ── queries ──────────────────────────────────────────────────────
@@ -176,19 +177,35 @@ export const diariesRouter = createRouter({
       }
 
       if (diary.generationStatus === "pending") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "Diary generation is already in progress for this date.",
-        });
+        // A fresh pending row is genuinely mid-generation. One that has not
+        // been touched for PENDING_TIMEOUT_MS was orphaned (the process
+        // generating it died), and since the scheduler only ever targets
+        // yesterday, today's stuck row can only be recovered from here.
+        const updatedAt = diary.updatedAt
+          ? new Date(diary.updatedAt).getTime()
+          : Date.now();
+        if (Date.now() - updatedAt < PENDING_TIMEOUT_MS) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Diary generation is already in progress for this date.",
+          });
+        }
+        console.log(
+          `[diaries.regenerate] retrying stuck pending diary ${diary.id} (date ${input.date})`,
+        );
       }
 
-      // Save current version before regenerating
-      await createDiaryVersion(ctx.user.id, diary.id, {
-        title: diary.title ?? undefined,
-        summary: diary.summary ?? undefined,
-        content: diary.content ?? undefined,
-        diaryModelUsed: diary.diaryModelUsed ?? undefined,
-      });
+      // Save the current version before regenerating. Skipped when the row has
+      // no content yet (a failed or recovered-stuck row) — there is nothing
+      // worth keeping, and an empty snapshot would just clutter the versions.
+      if (diary.title || diary.content) {
+        await createDiaryVersion(ctx.user.id, diary.id, {
+          title: diary.title ?? undefined,
+          summary: diary.summary ?? undefined,
+          content: diary.content ?? undefined,
+          diaryModelUsed: diary.diaryModelUsed ?? undefined,
+        });
+      }
 
       // Update diary to pending status for regeneration
       const updated = await updateDiary(ctx.user.id, diary.id, {

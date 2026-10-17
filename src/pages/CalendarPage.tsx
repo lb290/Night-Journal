@@ -17,7 +17,7 @@ import {
   getMonth,
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { ChevronLeft, ChevronRight, Eye } from "lucide-react";
+import { ChevronLeft, ChevronRight, Eye, Sparkles } from "lucide-react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -620,11 +620,14 @@ export default function CalendarPage() {
               className="mx-1 mt-3 cursor-pointer rounded-2xl p-5"
               style={{ backgroundColor: "var(--bg-surface)" }}
               onClick={() => {
-                if (selectedRecord && selectedRecord.hasDiary) {
+                if (
+                  selectedRecord &&
+                  (selectedRecord.hasDiary || selectedRecord.fragmentCount > 0)
+                ) {
+                  // Both cases land on the diary page: an existing diary shows
+                  // its content plus 「重新生成」; a day with fragments but no
+                  // diary shows the draft view with 「生成日记」.
                   handleNavigateToDetail(selectedDate);
-                } else if (selectedRecord && selectedRecord.fragmentCount > 0) {
-                  // Has fragments but no diary - show fragments on journal page
-                  navigate(`/?date=${toDateKey(selectedDate)}`);
                 } else {
                   // No records - go to journal
                   navigate("/");
@@ -681,8 +684,17 @@ export default function CalendarPage() {
                   )}
 
                   <div className="mt-3 flex items-center gap-1 font-ui text-xs font-medium" style={{ color: "var(--accent)" }}>
-                    <Eye size={14} strokeWidth={2} />
-                    <span>查看详情</span>
+                    {selectedRecord.hasDiary ? (
+                      <>
+                        <Eye size={14} strokeWidth={2} />
+                        <span>查看详情</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={14} strokeWidth={2} />
+                        <span>生成日记</span>
+                      </>
+                    )}
                     <ChevronRight size={14} strokeWidth={2} />
                   </div>
                 </>

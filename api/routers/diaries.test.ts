@@ -43,11 +43,27 @@ vi.mock("../lib/env", () => ({
   },
 }));
 
+// Mock the AI settings lookup and the (fire-and-forget) generation service so
+// regenerate tests never touch a real database or model endpoint.
+vi.mock("../queries/ai-settings", () => ({
+  findAiSettingsByUserId: vi.fn(),
+}));
+
+vi.mock("../services/diary", () => ({
+  generateDiaryForDate: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   findDiaryById,
+  findDiaryByDate,
+  updateDiary,
+  createDiaryVersion,
   deleteDiary,
   findRecentDiaryGenerationLogs,
 } from "../queries/diaries";
+import { findAiSettingsByUserId } from "../queries/ai-settings";
+import { generateDiaryForDate } from "../services/diary";
+import { PENDING_TIMEOUT_MS } from "../lib/scheduler";
 import { diariesRouter } from "./diaries";
 import type { TrpcContext } from "../context";
 
@@ -203,6 +219,102 @@ describe("diaries.generationLogs", () => {
     await caller.generationLogs();
 
     expect(findRecentDiaryGenerationLogs).toHaveBeenCalledWith(user.id, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// diaries.regenerate — pending handling
+// ---------------------------------------------------------------------------
+
+describe("diaries.regenerate", () => {
+  const user = makeUser(1);
+  const caller = makeCaller(makeCtx(user));
+  const configuredSettings = {
+    diaryApiKey: "encrypted-key",
+    diaryApiBaseUrl: "https://api.example.com",
+  };
+
+  it("rejects a fresh pending diary as already in progress", async () => {
+    vi.mocked(findAiSettingsByUserId).mockResolvedValue(
+      configuredSettings as never,
+    );
+    vi.mocked(findDiaryByDate).mockResolvedValue({
+      ...makeDiary(7, user.id),
+      generationStatus: "pending",
+      updatedAt: new Date(),
+    });
+
+    await expect(caller.regenerate({ date: "2025-01-01" })).rejects.toThrow(
+      expect.objectContaining({ code: "CONFLICT" }),
+    );
+    expect(generateDiaryForDate).not.toHaveBeenCalled();
+  });
+
+  it("recovers a pending diary stuck for longer than the timeout", async () => {
+    vi.mocked(findAiSettingsByUserId).mockResolvedValue(
+      configuredSettings as never,
+    );
+    const stuck = {
+      ...makeDiary(7, user.id),
+      generationStatus: "pending",
+      title: null,
+      content: null,
+      updatedAt: new Date(Date.now() - PENDING_TIMEOUT_MS - 60_000),
+    };
+    vi.mocked(findDiaryByDate).mockResolvedValue(stuck);
+    vi.mocked(updateDiary).mockResolvedValue(stuck);
+
+    await caller.regenerate({ date: "2025-01-01" });
+
+    expect(updateDiary).toHaveBeenCalledWith(
+      user.id,
+      7,
+      expect.objectContaining({ generationStatus: "pending" }),
+    );
+    // An empty row has nothing to snapshot.
+    expect(createDiaryVersion).not.toHaveBeenCalled();
+    expect(generateDiaryForDate).toHaveBeenCalledWith(user.id, "2025-01-01");
+  });
+
+  it("snapshots the previous version when regenerating a generated diary", async () => {
+    vi.mocked(findAiSettingsByUserId).mockResolvedValue(
+      configuredSettings as never,
+    );
+    const existing = makeDiary(8, user.id);
+    vi.mocked(findDiaryByDate).mockResolvedValue(existing);
+    vi.mocked(updateDiary).mockResolvedValue({
+      ...existing,
+      generationStatus: "pending",
+    });
+
+    await caller.regenerate({ date: "2025-01-01" });
+
+    expect(createDiaryVersion).toHaveBeenCalledWith(
+      user.id,
+      8,
+      expect.objectContaining({ title: "Test Diary", content: "Some content" }),
+    );
+    expect(generateDiaryForDate).toHaveBeenCalledWith(user.id, "2025-01-01");
+  });
+
+  it("throws PRECONDITION_FAILED when the diary model is not configured", async () => {
+    vi.mocked(findAiSettingsByUserId).mockResolvedValue(undefined);
+
+    await expect(caller.regenerate({ date: "2025-01-01" })).rejects.toThrow(
+      expect.objectContaining({ code: "PRECONDITION_FAILED" }),
+    );
+    expect(findDiaryByDate).not.toHaveBeenCalled();
+  });
+
+  it("throws NOT_FOUND when no diary exists for the date", async () => {
+    vi.mocked(findAiSettingsByUserId).mockResolvedValue(
+      configuredSettings as never,
+    );
+    vi.mocked(findDiaryByDate).mockResolvedValue(undefined);
+
+    await expect(caller.regenerate({ date: "2025-01-01" })).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_FOUND" }),
+    );
   });
 });
 

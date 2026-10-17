@@ -6,7 +6,12 @@ import { findEntriesByDate } from "../queries/entries";
 import { generateDiaryForDate } from "../services/diary";
 import { archiveExpiredMemories } from "../queries/memories";
 
-const PENDING_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * A pending diary older than this is considered stuck (the generating process
+ * likely died) and may be retried. Shared with the regenerate route so manual
+ * retries and the scheduler agree on when a `pending` row is abandoned.
+ */
+export const PENDING_TIMEOUT_MS = 10 * 60 * 1000;
 
 // In-memory guard to avoid reprocessing the same target date for the same user
 // in one server instance. If the server restarts, the guard is lost, but the

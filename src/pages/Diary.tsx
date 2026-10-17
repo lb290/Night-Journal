@@ -7,6 +7,7 @@ import {
   BookOpen,
   ChevronRight,
   FileText,
+  Sparkles,
 } from "lucide-react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -559,6 +560,16 @@ export default function Diary() {
     { enabled: isAuthenticated, staleTime: 30_000 },
   );
 
+  /* Today's fragments. Combined with the diary list below, this drives the
+     "not generated yet" card — the discoverable entry point for a first
+     manual generation, since a day without a diary row has no card of its
+     own in the list. */
+  const today = format(new Date(), "yyyy-MM-dd");
+  const { data: todayEntries } = trpc.entries.list.useQuery(
+    { date: today },
+    { enabled: isAuthenticated, staleTime: 30_000 },
+  );
+
   /* Reset when filters change */
   useEffect(() => {
     setAllDiaries([]);
@@ -615,6 +626,17 @@ export default function Diary() {
 
     return true;
   });
+
+  /* The "today, not generated yet" card shows only when today has fragments,
+     no diary row exists for today, and the active filters would include a
+     draft. */
+  const todayFragmentCount = todayEntries?.length ?? 0;
+  const showTodayDraft =
+    !isLoading &&
+    todayFragmentCount > 0 &&
+    !allDiaries.some((d) => diaryDateToYMD(d.diaryDate) === today) &&
+    filters.styles.length === 0 &&
+    (filters.statuses.length === 0 || filters.statuses.includes("draft"));
 
   /* Infinite scroll */
   const loadMore = useCallback(() => {
@@ -717,6 +739,46 @@ export default function Diary() {
 
       {/* ── Diary list ── */}
       <div className="flex flex-col gap-4 px-4 pb-24 pt-4">
+        {/* Today's fragments with no diary yet — opens the draft view where
+            「生成日记」lives. */}
+        {showTodayDraft && (
+          <motion.button
+            className="w-full rounded-2xl p-5 text-left"
+            style={{
+              backgroundColor: "var(--bg-surface)",
+              boxShadow:
+                "0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)",
+            }}
+            onClick={() => navigate(`/diary/${today}`)}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            whileTap={{ scale: 0.98, backgroundColor: "var(--accent-soft)" }}
+            aria-label="生成今天的日记"
+          >
+            <div className="flex items-center justify-between">
+              <span
+                className="font-ui text-[15px] font-medium"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {formatDiaryDate(today)}
+              </span>
+              <span
+                className="inline-flex items-center gap-1 font-ui text-xs font-medium"
+                style={{ color: "var(--accent)" }}
+              >
+                <Sparkles size={14} strokeWidth={2} />
+                生成日记
+              </span>
+            </div>
+            <p
+              className="mt-3 font-body text-[15px]"
+              style={{ color: "var(--text-secondary)", lineHeight: 1.75 }}
+            >
+              今天已经记下 {todayFragmentCount} 个碎片，编辑还没写成日记
+            </p>
+          </motion.button>
+        )}
+
         <AnimatePresence mode="popLayout">
           {showSkeletons ? (
             <>
@@ -725,7 +787,9 @@ export default function Diary() {
               <SkeletonCard />
             </>
           ) : filteredDiaries.length === 0 ? (
-            <EmptyState />
+            showTodayDraft ? null : (
+              <EmptyState />
+            )
           ) : (
             filteredDiaries.map((diary, i) => (
               <DiaryCard key={diary.id} diary={diary} index={i} />
