@@ -1,5 +1,6 @@
 import { format } from "date-fns";
-import { callChatModel } from "../lib/openai";
+import { complete, providerKindOf } from "../lib/model-dispatch";
+import { decryptApiKey } from "../lib/crypto";
 import { findEntriesByDate, updateEntry } from "../queries/entries";
 import { findAiSettingsByUserId } from "../queries/ai-settings";
 import { findDiaryByDate, updateDiary } from "../queries/diaries";
@@ -315,10 +316,20 @@ export async function generateDiaryForDate(userId: number, date: string): Promis
       userPromptTemplate,
     );
 
-    const content = await callChatModel({
-      apiKey: settings.diaryApiKey,
-      baseUrl: settings.diaryApiBaseUrl,
+    // Dispatch on the configured provider: an OpenAI-compatible endpoint or the
+    // WorkBuddy channel. The WorkBuddy credential is stored encrypted, so it is
+    // decrypted here, at the point of use.
+    const kind = providerKindOf(settings.diaryProvider);
+    const content = await complete({
+      kind,
+      apiKey: settings.diaryApiKey ?? undefined,
+      baseUrl: settings.diaryApiBaseUrl ?? undefined,
       model: settings.diaryModel ?? undefined,
+      accessToken:
+        kind === "workbuddy"
+          ? (decryptApiKey(settings.diaryWorkbuddyCredential) ?? undefined)
+          : undefined,
+      productId: settings.diaryWorkbuddyProduct ?? undefined,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },

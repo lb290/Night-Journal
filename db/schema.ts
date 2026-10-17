@@ -139,6 +139,15 @@ export const aiSettings = mysqlTable("ai_settings", {
   diaryApiKey: text("diary_api_key"),
   diaryApiBaseUrl: varchar("diary_api_base_url", { length: 500 }),
   diaryModel: varchar("diary_model", { length: 100 }),
+  // Provider switch: "openai-compatible" (default) or "workbuddy".
+  // Null/legacy rows are treated as openai-compatible so existing
+  // configurations keep working without a migration step.
+  diaryProvider: varchar("diary_provider", { length: 32 }),
+  // WorkBuddy only: which regional build to talk to
+  // ("workbuddy" = international, "workbuddy-cn" = China).
+  diaryWorkbuddyProduct: varchar("diary_workbuddy_product", { length: 32 }),
+  // WorkBuddy only: the OAuth credential, encrypted at rest like an API key.
+  diaryWorkbuddyCredential: text("diary_workbuddy_credential"),
   diaryGenerationTime: varchar("diary_generation_time", { length: 10 }).default("02:00"),
   diaryLanguage: varchar("diary_language", { length: 20 }).default("zh"),
   diaryStyle: varchar("diary_style", { length: 50 }).default("温柔真实"),

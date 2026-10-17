@@ -4,14 +4,21 @@ import { aiSettings } from "@db/schema";
 import type { InsertAiSettings } from "@db/schema";
 import { decryptApiKey, encryptApiKey } from "../../lib/crypto";
 
-function decryptSettingsFields<T extends { visionApiKey?: string | null; diaryApiKey?: string | null }>(
-  settings: T | undefined,
-): T | undefined {
+function decryptSettingsFields<
+  T extends {
+    visionApiKey?: string | null;
+    diaryApiKey?: string | null;
+    diaryWorkbuddyCredential?: string | null;
+  },
+>(settings: T | undefined): T | undefined {
   if (!settings) return undefined;
   return {
     ...settings,
     visionApiKey: decryptApiKey(settings.visionApiKey),
     diaryApiKey: decryptApiKey(settings.diaryApiKey),
+    // The WorkBuddy credential is a bearer token; it gets the same at-rest
+    // treatment as an API key.
+    diaryWorkbuddyCredential: decryptApiKey(settings.diaryWorkbuddyCredential),
   };
 }
 
@@ -24,6 +31,10 @@ function encryptSettingsData(
   }
   if ("diaryApiKey" in data && data.diaryApiKey !== undefined) {
     encrypted.diaryApiKey = encryptApiKey(data.diaryApiKey) ?? null;
+  }
+  if ("diaryWorkbuddyCredential" in data && data.diaryWorkbuddyCredential !== undefined) {
+    encrypted.diaryWorkbuddyCredential =
+      encryptApiKey(data.diaryWorkbuddyCredential) ?? null;
   }
   return encrypted;
 }
@@ -89,6 +100,12 @@ export async function updateDiarySettings(
     diaryApiKey?: string;
     diaryApiBaseUrl?: string;
     diaryModel?: string;
+    /** "openai-compatible" | "workbuddy"; null/absent keeps the default. */
+    diaryProvider?: string;
+    /** WorkBuddy regional build id. */
+    diaryWorkbuddyProduct?: string;
+    /** Serialized WorkBuddy credential; encrypted at rest. */
+    diaryWorkbuddyCredential?: string;
     diaryGenerationTime?: string;
     diaryLanguage?: string;
     diaryStyle?: string;

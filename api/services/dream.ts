@@ -21,7 +21,8 @@
  * `short_term_memories`. Expired short-term memories are deleted.
  */
 
-import { callChatModel } from "../lib/openai";
+import { complete, providerKindOf } from "../lib/model-dispatch";
+import { decryptApiKey } from "../lib/crypto";
 import { findAiSettingsByUserId } from "../queries/ai-settings";
 import { findEntriesByDate } from "../queries/entries";
 import { findRecentGeneratedDiaries } from "../queries/diaries";
@@ -305,10 +306,19 @@ async function runDreamProfile(userId: number, todayDate: string): Promise<Dream
       todayDate,
     });
 
-    const content = await callChatModel({
-      apiKey: settings.diaryApiKey,
-      baseUrl: settings.diaryApiBaseUrl,
+    // Same provider dispatch as diary generation: Dream must be able to run on
+    // whatever backend the user configured, including the WorkBuddy channel.
+    const kind = providerKindOf(settings.diaryProvider);
+    const content = await complete({
+      kind,
+      apiKey: settings.diaryApiKey ?? undefined,
+      baseUrl: settings.diaryApiBaseUrl ?? undefined,
       model: settings.diaryModel ?? undefined,
+      accessToken:
+        kind === "workbuddy"
+          ? (decryptApiKey(settings.diaryWorkbuddyCredential) ?? undefined)
+          : undefined,
+      productId: settings.diaryWorkbuddyProduct ?? undefined,
       messages: [{ role: "system", content: DREAM_SYSTEM_PROMPT }, { role: "user", content: userMessage }],
       maxTokens: 1536,
       temperature: 0.4,

@@ -14,6 +14,8 @@ import {
 } from "../queries/model-presets";
 import { testModelConnection } from "../lib/openai";
 import { decryptApiKey } from "../lib/crypto";
+import { fetchAuthState, loopGetToken, getAccount, buildCredential } from "../lib/workbuddy/auth";
+import { ALL_PRODUCTS, PRODUCT_MODELS, productById } from "../lib/workbuddy/product";
 
 export const aiSettingsRouter = createRouter({
   // ── queries ──────────────────────────────────────────────────────
@@ -35,6 +37,8 @@ export const aiSettingsRouter = createRouter({
         visionPromptTemplate: null,
         diaryModel: null,
         diaryApiBaseUrl: null,
+        diaryProvider: null,
+        diaryWorkbuddyProduct: null,
         diaryPromptTemplate: null,
         stylePrompts: null,
         enableDream: true,
@@ -43,11 +47,13 @@ export const aiSettingsRouter = createRouter({
       };
     }
 
-    // Never expose API keys to the frontend
+    // Never expose API keys or the WorkBuddy credential to the frontend. The
+    // credential is a bearer token, so leaking it would hand over the account.
     return {
       ...settings,
       visionApiKey: undefined,
       diaryApiKey: undefined,
+      diaryWorkbuddyCredential: undefined,
     };
   }),
 
@@ -84,6 +90,8 @@ export const aiSettingsRouter = createRouter({
         diaryApiKey: z.string().optional(),
         diaryApiBaseUrl: z.string().max(500).optional(),
         diaryModel: z.string().max(100).optional(),
+        diaryProvider: z.enum(["openai-compatible", "workbuddy"]).optional(),
+        diaryWorkbuddyProduct: z.string().max(32).optional(),
         diaryGenerationTime: z.string().max(10).optional(),
         diaryLanguage: z.string().max(20).optional(),
         diaryStyle: z.string().max(50).optional(),
@@ -105,6 +113,7 @@ export const aiSettingsRouter = createRouter({
         ...settings,
         visionApiKey: undefined,
         diaryApiKey: undefined,
+        diaryWorkbuddyCredential: undefined,
       };
     }),
 
@@ -225,4 +234,75 @@ export const aiSettingsRouter = createRouter({
       });
       return { ...settings, visionApiKey: undefined, diaryApiKey: undefined };
     }),
+
+  // ── WorkBuddy channel ────────────────────────────────────────────
+
+  /**
+   * Step 1 of the WorkBuddy login: obtain a state and the URL the user opens.
+   *
+   * The flow is polling-based (no local callback server), which is why it can
+   * be driven from a server: the client opens the URL, then polls `workbuddyPoll`.
+   */
+  workbuddyStart: authedQuery
+    .input(z.object({ product: z.string().max(32).optional() }))
+    .mutation(async ({ input }) => {
+      const product = productById(input.product);
+      const { state, authUrl } = await fetchAuthState(product);
+      return { state, authUrl, product: product.id, displayName: product.displayName };
+    }),
+
+  /**
+   * Step 2: poll until the browser approval lands, then persist the credential.
+   *
+   * Blocks for up to the login timeout, so the client should keep the request
+   * open rather than firing it in a tight loop.
+   */
+  workbuddyPoll: authedQuery
+    .input(
+      z.object({
+        state: z.string().min(1),
+        product: z.string().max(32).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const product = productById(input.product);
+      const token = await loopGetToken(product, input.state);
+      const account = await getAccount(product, input.state, token);
+      const credential = buildCredential(token, account);
+
+      const settings = await updateDiarySettings(ctx.user.id, {
+        diaryProvider: "workbuddy",
+        diaryWorkbuddyProduct: product.id,
+        diaryWorkbuddyCredential: JSON.stringify(credential),
+        // A sensible default the user can change afterwards.
+        diaryModel: "deepseek-v4.1-flash",
+      });
+
+      return {
+        success: true,
+        nickname: account.nickname,
+        product: product.id,
+        // Never echo the credential back.
+        diaryProvider: settings?.diaryProvider ?? "workbuddy",
+      };
+    }),
+
+  /** Sign out of WorkBuddy and fall back to the OpenAI-compatible path. */
+  workbuddySignOut: authedQuery.mutation(async ({ ctx }) => {
+    await updateDiarySettings(ctx.user.id, {
+      diaryProvider: "openai-compatible",
+      diaryWorkbuddyCredential: "",
+      diaryWorkbuddyProduct: "",
+    });
+    return { success: true };
+  }),
+
+  /** Which products exist and which models each build serves. */
+  workbuddyProducts: authedQuery.query(() =>
+    ALL_PRODUCTS.map((product) => ({
+      id: product.id,
+      displayName: product.displayName,
+      models: PRODUCT_MODELS[product.id] ?? [],
+    })),
+  ),
 });
