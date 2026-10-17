@@ -17,6 +17,7 @@
 import { callChatModel } from "./openai";
 import { chatCompletion, ensureSystemPrompt } from "./workbuddy/chat";
 import { productById } from "./workbuddy/product";
+import { resolveWorkbuddyToken } from "./workbuddy/credential";
 import type { WorkBuddyProduct } from "./workbuddy/product";
 
 /** Which backend serves the request. */
@@ -50,13 +51,13 @@ export interface ModelRequest {
 export async function complete(request: ModelRequest): Promise<string> {
   if (request.kind === "workbuddy") {
     const product: WorkBuddyProduct = productById(request.productId);
-    // What the settings layer stores is the serialized credential, not a bare
-    // token: it carries the refresh token and expiry too. Accept either shape
-    // so a caller passing a plain token still works.
-    const accessToken = readAccessToken(request.accessToken);
+    // Prefer the DSH credential store so one login serves both tools, falling
+    // back to the copy in this app's database. See workbuddy/credential.ts.
+    const resolved = resolveWorkbuddyToken(request.accessToken);
+    const accessToken = resolved.accessToken;
     if (accessToken === "") {
       throw new Error(
-        "WorkBuddy is selected but no credential is stored. Sign in again from Settings.",
+        "WorkBuddy is selected but no credential was found in either the DSH store or this app. Sign in again.",
       );
     }
     const model = request.model ?? "deepseek-v4.1-flash";
@@ -85,27 +86,6 @@ export async function complete(request: ModelRequest): Promise<string> {
     temperature: request.temperature,
     timeoutMs: request.timeoutMs,
   });
-}
-
-/**
- * Pull the bearer token out of a stored credential.
- *
- * The WorkBuddy credential is persisted as a JSON object (access token,
- * refresh token, expiry, account), because a refresh needs the extra fields.
- * Only the access token belongs in an Authorization header — sending the raw
- * JSON produces a 401 that looks like an auth failure but is really a shape
- * mismatch.
- */
-export function readAccessToken(stored: string | null | undefined): string {
-  if (typeof stored !== "string" || stored.trim() === "") return "";
-  const trimmed = stored.trim();
-  if (!trimmed.startsWith("{")) return trimmed;
-  try {
-    const parsed = JSON.parse(trimmed) as { access_token?: unknown };
-    return typeof parsed.access_token === "string" ? parsed.access_token : "";
-  } catch {
-    return "";
-  }
 }
 
 /**

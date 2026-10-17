@@ -1,48 +1,89 @@
 /**
- * Tests for the WorkBuddy credential shape.
+ * Tests for provider dispatch.
  *
- * The stored credential is a JSON object carrying the access token, the refresh
- * token and the expiry. Only the access token belongs in an Authorization
- * header: sending the whole JSON yields a 401 that reads like an auth failure
- * but is really a shape mismatch.
+ * The dispatch layer is the single call site for both providers: it routes to
+ * the OpenAI-compatible client or the WorkBuddy channel depending on the
+ * configured kind. Credential resolution itself lives in
+ * workbuddy/credential.test.ts.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("./openai", () => ({ callChatModel: vi.fn() }));
 vi.mock("./workbuddy/chat", () => ({
   chatCompletion: vi.fn(),
   ensureSystemPrompt: (m: unknown) => m,
 }));
+vi.mock("./workbuddy/credential", () => ({
+  resolveWorkbuddyToken: vi.fn(),
+}));
 
-import { readAccessToken } from "./model-dispatch";
+import { callChatModel } from "./openai";
+import { chatCompletion } from "./workbuddy/chat";
+import { resolveWorkbuddyToken } from "./workbuddy/credential";
+import { complete, providerKindOf } from "./model-dispatch";
 
-describe("readAccessToken", () => {
-  it("extracts the token from a serialized credential", () => {
-    const stored = JSON.stringify({
-      access_token: "eyJhbGciOi.payload.sig",
-      refresh_token: "r",
-      expires_at: "2027-01-01T00:00:00Z",
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("providerKindOf", () => {
+  it("defaults to the OpenAI-compatible path", () => {
+    expect(providerKindOf(null)).toBe("openai-compatible");
+    expect(providerKindOf(undefined)).toBe("openai-compatible");
+    expect(providerKindOf("")).toBe("openai-compatible");
+    expect(providerKindOf("openai-compatible")).toBe("openai-compatible");
+  });
+
+  it("recognises the WorkBuddy channel", () => {
+    expect(providerKindOf("workbuddy")).toBe("workbuddy");
+  });
+
+  it("treats an unknown value as the default rather than failing", () => {
+    expect(providerKindOf("something-else")).toBe("openai-compatible");
+  });
+});
+
+describe("complete", () => {
+  it("routes an openai-compatible request to the generic client", async () => {
+    vi.mocked(callChatModel).mockResolvedValue("hi");
+    const text = await complete({
+      kind: "openai-compatible",
+      apiKey: "k",
+      baseUrl: "https://api.test/v1",
+      model: "m",
+      messages: [{ role: "user", content: "hello" }],
     });
-    expect(readAccessToken(stored)).toBe("eyJhbGciOi.payload.sig");
+    expect(text).toBe("hi");
+    expect(callChatModel).toHaveBeenCalledTimes(1);
+    expect(chatCompletion).not.toHaveBeenCalled();
   });
 
-  it("passes a bare token through unchanged", () => {
-    expect(readAccessToken("eyJhbGciOi.payload.sig")).toBe("eyJhbGciOi.payload.sig");
+  it("routes a workbuddy request to the channel client", async () => {
+    vi.mocked(resolveWorkbuddyToken).mockReturnValue({ accessToken: "tok", source: "dsh" });
+    vi.mocked(chatCompletion).mockResolvedValue("日记");
+
+    const text = await complete({
+      kind: "workbuddy",
+      model: "deepseek-v4.1-flash",
+      productId: "workbuddy",
+      messages: [{ role: "user", content: "写日记" }],
+    });
+
+    expect(text).toBe("日记");
+    expect(chatCompletion).toHaveBeenCalledTimes(1);
+    expect(callChatModel).not.toHaveBeenCalled();
   });
 
-  it("returns an empty string for missing or blank input", () => {
-    expect(readAccessToken(null)).toBe("");
-    expect(readAccessToken(undefined)).toBe("");
-    expect(readAccessToken("")).toBe("");
-    expect(readAccessToken("   ")).toBe("");
-  });
+  it("fails with a clear message when no WorkBuddy credential is found", async () => {
+    vi.mocked(resolveWorkbuddyToken).mockReturnValue({ accessToken: "", source: "none" });
 
-  it("returns an empty string when the credential has no access_token", () => {
-    expect(readAccessToken(JSON.stringify({ refresh_token: "r" }))).toBe("");
-  });
-
-  it("returns an empty string for malformed JSON rather than throwing", () => {
-    expect(readAccessToken("{not json")).toBe("");
+    await expect(
+      complete({
+        kind: "workbuddy",
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toThrow(/no credential was found/i);
+    expect(chatCompletion).not.toHaveBeenCalled();
   });
 });
