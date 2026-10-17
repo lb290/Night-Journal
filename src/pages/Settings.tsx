@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { WorkBuddySettings } from '@/components/WorkBuddySettings'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
@@ -985,6 +986,10 @@ function WriterModelTab() {
   const [apiBase, setApiBase] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [modelName, setModelName] = useState('')
+  // Which backend serves diary generation. "openai-compatible" keeps the
+  // API-key form; "workbuddy" switches to the OAuth channel panel.
+  const [provider, setProvider] = useState<'openai-compatible' | 'workbuddy'>('openai-compatible')
+  const [workbuddyProduct, setWorkbuddyProduct] = useState('workbuddy')
   const [language, setLanguage] = useState('zh')
   const [style, setStyle] = useState('温柔真实')
   const [length, setLength] = useState('中')
@@ -1000,6 +1005,8 @@ function WriterModelTab() {
     if (settings) {
       if (settings.diaryApiBaseUrl) setApiBase(settings.diaryApiBaseUrl)
       if (settings.diaryModel) setModelName(settings.diaryModel)
+      setProvider(settings.diaryProvider === 'workbuddy' ? 'workbuddy' : 'openai-compatible')
+      if (settings.diaryWorkbuddyProduct) setWorkbuddyProduct(settings.diaryWorkbuddyProduct)
       if (settings.diaryLanguage) setLanguage(settings.diaryLanguage)
       if (settings.diaryStyle) setStyle(settings.diaryStyle)
       if (settings.diaryLength) setLength(settings.diaryLength)
@@ -1032,9 +1039,13 @@ function WriterModelTab() {
       diaryPromptTemplate?: string
       stylePrompts?: string
       diaryApiKey?: string
+      diaryProvider?: 'openai-compatible' | 'workbuddy'
+      diaryWorkbuddyProduct?: string
     } = {
       diaryApiBaseUrl: apiBase || undefined,
       diaryModel: modelName || undefined,
+      diaryProvider: provider,
+      diaryWorkbuddyProduct: provider === 'workbuddy' ? workbuddyProduct : undefined,
       diaryLanguage: language,
       diaryStyle: style,
       diaryLength: length,
@@ -1046,7 +1057,7 @@ function WriterModelTab() {
       payload.diaryApiKey = apiKey.trim()
     }
     updateDiary.mutate(payload)
-  }, [apiBase, apiKey, modelName, language, style, length, genTime, systemPrompt, stylePromptsMap, updateDiary])
+  }, [apiBase, apiKey, modelName, provider, workbuddyProduct, language, style, length, genTime, systemPrompt, stylePromptsMap, updateDiary])
 
   const handleTest = useCallback(async () => {
     const keyToTest = apiKey.trim()
@@ -1095,7 +1106,67 @@ function WriterModelTab() {
       initial="hidden"
       animate="visible"
     >
-      {/* Connection Settings */}
+      {/* Provider switch — decides which connection panel appears below */}
+      <motion.div variants={cardItem}>
+        <Card
+          className="overflow-hidden rounded-2xl border-0 shadow-none"
+          style={{ backgroundColor: 'var(--bg-surface)' }}
+        >
+          <CardHeader className="px-4 pt-4 pb-0">
+            <CardTitle
+              className="text-base font-medium"
+              style={{
+                fontFamily: "'DM Sans', sans-serif",
+                color: 'var(--text-primary)',
+              }}
+            >
+              模型来源
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setProvider('openai-compatible')}
+                className="flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                style={{
+                  backgroundColor:
+                    provider === 'openai-compatible' ? 'var(--accent)' : 'var(--bg-elevated)',
+                  color: provider === 'openai-compatible' ? '#fff' : 'var(--text-secondary)',
+                }}
+              >
+                OpenAI 兼容
+              </button>
+              <button
+                onClick={() => setProvider('workbuddy')}
+                className="flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                style={{
+                  backgroundColor: provider === 'workbuddy' ? 'var(--accent)' : 'var(--bg-elevated)',
+                  color: provider === 'workbuddy' ? '#fff' : 'var(--text-secondary)',
+                }}
+              >
+                WorkBuddy
+              </button>
+            </div>
+            <p className="mt-2 text-xs px-1" style={{ color: 'var(--text-tertiary)' }}>
+              {provider === 'openai-compatible'
+                ? '任何兼容 OpenAI 协议的服务：OpenAI、DeepSeek、通义千问等'
+                : '腾讯 WorkBuddy 账号渠道，登录后无需填 API Key'}
+            </p>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* WorkBuddy channel panel — replaces the API-key form when selected */}
+      {provider === 'workbuddy' && (
+        <WorkBuddySettings
+          provider={provider}
+          product={workbuddyProduct}
+          onChanged={() => utils.aiSettings.get.invalidate()}
+        />
+      )}
+
+      {/* Connection Settings — the OpenAI-compatible form, only when selected */}
+      {provider === 'openai-compatible' && (
       <motion.div variants={cardItem}>
         <Card
           className="overflow-hidden rounded-2xl border-0 shadow-none"
@@ -1230,6 +1301,7 @@ function WriterModelTab() {
           </CardContent>
         </Card>
       </motion.div>
+      )}
 
       {/* Presets */}
       <PresetManager
