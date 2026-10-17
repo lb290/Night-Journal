@@ -3,6 +3,7 @@
  */
 
 import { isPrivateHost, isPrivateResolvedHost } from "./url-guard";
+import { env } from "./env";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -28,6 +29,21 @@ function normalizeBaseUrl(baseUrl: string): string {
   return url;
 }
 
+/**
+ * Is this endpoint explicitly allowlisted for private-network use?
+ *
+ * Self-hosted deployments often run an OpenAI-compatible gateway on loopback
+ * (e.g. 127.0.0.1:8326). Operators opt in per endpoint through
+ * ALLOW_PRIVATE_MODEL_HOSTS so the SSRF guard stays on for everything else.
+ */
+function isAllowlistedPrivateHost(hostname: string, port: string): boolean {
+  const allowed = env.privateHostAllowlist;
+  if (allowed.size === 0) return false;
+  const host = hostname.toLowerCase();
+  const effectivePort = port !== "" ? port : "80";
+  return allowed.has(host) || allowed.has(`${host}:${effectivePort}`);
+}
+
 async function validateBaseUrl(baseUrl: string): Promise<void> {
   const normalized = normalizeBaseUrl(baseUrl);
   let parsed: URL;
@@ -39,6 +55,13 @@ async function validateBaseUrl(baseUrl: string): Promise<void> {
 
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("API base URL must use http or https");
+  }
+
+  // An explicit allowlist entry wins over the private-range check below. This
+  // keeps the default posture (block loopback/RFC1918) while letting a
+  // self-hosted operator point at their own local gateway.
+  if (isAllowlistedPrivateHost(parsed.hostname, parsed.port)) {
+    return;
   }
 
   if (isPrivateHost(parsed.hostname)) {
@@ -67,7 +90,13 @@ export async function testModelConnection(opts: {
 
   const body = {
     model,
-    messages: [{ role: "user", content: "Hi. Reply with exactly: ok" }] as ChatMessage[],
+    // Some gateways (e.g. WorkBuddy) reject a conversation that does not open
+    // with a system message, so lead with one. It also matches how the real
+    // diary call is shaped, making the probe representative.
+    messages: [
+      { role: "system", content: "You are a connectivity probe. Reply briefly." },
+      { role: "user", content: "Hi. Reply with exactly: ok" },
+    ] as ChatMessage[],
     max_tokens: 4,
     temperature: 0,
   };
