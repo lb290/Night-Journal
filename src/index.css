@@ -94,6 +94,18 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* On narrow phone screens the base font felt too small in portrait (the
+     layout caps at 480px and is centered, so a phone in portrait renders the
+     full desktop-ish 12-15px text 1:1, which reads tiny). Scale the root up
+     on small viewports so Tailwind's rem-based sizes grow proportionally.
+     We key off viewport width, not orientation, so landscape phones (which
+     are wide enough to read comfortably) keep the original sizing. */
+  @media (max-width: 480px) {
+    html {
+      font-size: 17px;
+    }
+  }
+
   body {
     font-family: 'DM Sans', sans-serif;
     background-color: var(--bg-primary);
