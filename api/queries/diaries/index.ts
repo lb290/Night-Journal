@@ -1,6 +1,7 @@
-import { eq, and, desc, gte, lt } from "drizzle-orm";
+import { eq, and, desc, gte, sql } from "drizzle-orm";
 import { getDb } from "../connection";
 import { diaries, diaryVersions } from "@db/schema";
+import { monthRange, toDateColumnValue } from "../../lib/date";
 
 // ─── Diaries ───────────────────────────────────────────────────────
 
@@ -15,8 +16,8 @@ export async function findDiariesByUser(userId: number, limit: number, offset: n
 }
 
 export async function findDiariesByMonth(userId: number, year: number, month: number) {
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 1);
+  // DATE-column strings, not local-midnight Dates (see api/lib/date.ts).
+  const { start: startDate, end: endDate } = monthRange(year, month);
 
   return getDb()
     .select()
@@ -24,8 +25,8 @@ export async function findDiariesByMonth(userId: number, year: number, month: nu
     .where(
       and(
         eq(diaries.userId, userId),
-        gte(diaries.diaryDate, startDate),
-        lt(diaries.diaryDate, endDate),
+        sql`${diaries.diaryDate} >= ${startDate}`,
+        sql`${diaries.diaryDate} < ${endDate}`,
       ),
     )
     .orderBy(desc(diaries.diaryDate));
@@ -35,7 +36,14 @@ export async function findDiaryByDate(userId: number, date: string) {
   const rows = await getDb()
     .select()
     .from(diaries)
-    .where(and(eq(diaries.userId, userId), eq(diaries.diaryDate, new Date(date))))
+    .where(
+      and(
+        eq(diaries.userId, userId),
+        // Bind the calendar day as a string; a Date would be shifted by the
+        // server's UTC offset and match nothing (see api/lib/date.ts).
+        sql`${diaries.diaryDate} = ${toDateColumnValue(date)}`,
+      ),
+    )
     .limit(1);
   return rows.at(0);
 }

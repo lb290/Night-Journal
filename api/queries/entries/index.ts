@@ -1,6 +1,7 @@
-import { eq, and, isNull, desc, gte, lt } from "drizzle-orm";
+import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { getDb } from "../connection";
 import { entries, entryAttachments } from "@db/schema";
+import { monthRange, toDateColumnValue } from "../../lib/date";
 
 // ─── Entries ───────────────────────────────────────────────────────
 
@@ -12,7 +13,11 @@ export async function findEntriesByDate(userId: number, date: string) {
     .where(
       and(
         eq(entries.userId, userId),
-        eq(entries.entryDate, new Date(date)),
+        // Bind the calendar day as a "YYYY-MM-DD" string: DATE columns carry no
+        // timezone, and passing a Date lets the driver shift it by the server's
+        // UTC offset (UTC+8 turned 2026-10-17 into 2026-10-17 08:00:00, matching
+        // nothing).
+        sql`${entries.entryDate} = ${toDateColumnValue(date)}`,
         isNull(entries.deletedAt),
       ),
     )
@@ -98,8 +103,9 @@ export async function updateEntry(
 
 export async function findEntriesByMonth(userId: number, year: number, month: number) {
   const db = getDb();
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 1);
+  // Month bounds as DATE-column strings — local-midnight Date objects shift by
+  // the server's UTC offset and drift outside the requested month.
+  const { start: startDate, end: endDate } = monthRange(year, month);
 
   const userEntries = await db
     .select({
@@ -118,8 +124,8 @@ export async function findEntriesByMonth(userId: number, year: number, month: nu
     .where(
       and(
         eq(entries.userId, userId),
-        gte(entries.entryDate, startDate),
-        lt(entries.entryDate, endDate),
+        sql`${entries.entryDate} >= ${startDate}`,
+        sql`${entries.entryDate} < ${endDate}`,
         isNull(entries.deletedAt),
       ),
     )
@@ -166,7 +172,6 @@ function isValidStoragePath(userId: number, storagePath: string): boolean {
 }
 
 function isValidAttachmentFileUrl(
-  userId: number,
   storagePath: string,
   fileUrl: string,
 ): boolean {
@@ -184,7 +189,7 @@ export async function createAttachment(
   if (!isValidStoragePath(userId, data.storagePath)) {
     throw new Error("Invalid attachment storage path");
   }
-  if (!isValidAttachmentFileUrl(userId, data.storagePath, data.fileUrl)) {
+  if (!isValidAttachmentFileUrl(data.storagePath, data.fileUrl)) {
     throw new Error("Invalid attachment file URL");
   }
   if (data.fileName.includes("..") || data.fileName.includes("/") || data.fileName.includes("\\")) {

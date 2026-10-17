@@ -199,7 +199,23 @@ ${imageSummaries}
   return DIARY_PLACEHOLDERS.reduce((acc, key) => acc.replaceAll(key, values[key.slice(2, -2)] ?? ""), template);
 }
 
-function parseDiaryResponse(
+/**
+ * Decode newlines that arrived double-escaped.
+ *
+ * Models frequently emit content whose line breaks are escaped twice, so after
+ * JSON.parse the string still holds the literal two characters "\\" + "n"
+ * instead of a newline. Stored as-is, the whole diary renders as one
+ * unbroken paragraph. We only rewrite the literal escape sequence, leaving
+ * any real newlines untouched.
+ */
+function decodeEscapedNewlines(text: string): string {
+  return text
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t");
+}
+
+export function parseDiaryResponse(
   content: string,
 ): { title: string; summary: string; content: string } | null {
   try {
@@ -208,7 +224,8 @@ function parseDiaryResponse(
     const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
     const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
     const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
-    const diaryContent = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    const rawContent = typeof parsed.content === "string" ? parsed.content.trim() : "";
+    const diaryContent = decodeEscapedNewlines(rawContent).trim();
     if (!title || !diaryContent) return null;
     return { title, summary, content: diaryContent };
   } catch (err) {
