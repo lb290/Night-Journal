@@ -9,6 +9,7 @@ import {
   updateEntry,
   softDeleteEntry,
   createAttachment,
+  deleteAttachment,
   updateAttachmentVision,
   findAttachmentsByEntryId,
 } from "../queries/entries";
@@ -91,10 +92,25 @@ export const entriesRouter = createRouter({
         moodLabel: z.string().max(20).optional(),
         entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         includedInDiary: z.boolean().optional(),
+        // Images added while editing. Same shape as entries.create.
+        attachments: z
+          .array(
+            z.object({
+              fileUrl: z.string(),
+              fileType: z.string(),
+              fileName: z.string(),
+              storagePath: z.string(),
+              thumbStoragePath: z.string().nullish(),
+              fileSize: z.number().int().nonnegative().nullish(),
+            }),
+          )
+          .optional(),
+        // Ids of existing attachments the user removed in the editor.
+        removedAttachmentIds: z.array(z.number().int().positive()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...data } = input;
+      const { id, attachments, removedAttachmentIds, ...data } = input;
       const entry = await updateEntry(ctx.user.id, id, data);
       if (!entry) {
         throw new TRPCError({
@@ -102,7 +118,27 @@ export const entriesRouter = createRouter({
           message: "Entry not found",
         });
       }
-      return entry;
+
+      // Removals first: the client sends the ids that are no longer visible,
+      // so a re-added file can never be deleted in the same pass.
+      if (removedAttachmentIds && removedAttachmentIds.length > 0) {
+        for (const attachmentId of removedAttachmentIds) {
+          await deleteAttachment(ctx.user.id, id, attachmentId);
+        }
+      }
+
+      if (attachments && attachments.length > 0) {
+        for (const att of attachments) {
+          await createAttachment(ctx.user.id, id, att);
+        }
+
+        // New images need understanding; run the same pass as create.
+        triggerVisionAnalysis(ctx.user.id, id, input.contentText ?? entry.contentText).catch(
+          (err) => console.error("[vision] Analysis failed:", err),
+        );
+      }
+
+      return findEntryById(ctx.user.id, id);
     }),
 
   delete: authedQuery

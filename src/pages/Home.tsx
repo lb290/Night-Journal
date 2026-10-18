@@ -52,6 +52,8 @@ interface Fragment {
   /** 400 px previews, parallel to `images`; used by the multi-image grid. */
   thumbImages?: string[]
   attachmentMetas?: AttachmentMeta[]
+  /** Stored attachments with their ids, so the editor can remove them. */
+  attachmentRefs?: Array<{ id: number; fileUrl: string; thumbUrl?: string }>
   mood?: MoodKey
   timestamp: string
 }
@@ -461,12 +463,18 @@ function BottomDrawer({
 }: {
   open: boolean
   onClose: () => void
-  onSubmit: (fragment: Omit<Fragment, 'id' | 'timestamp'>, attachments?: UploadedAttachment[]) => void
+  onSubmit: (
+    fragment: Omit<Fragment, 'id' | 'timestamp'>,
+    attachments?: UploadedAttachment[],
+    removedAttachmentIds?: number[],
+  ) => void
   mode?: 'create' | 'edit'
   initialData?: {
     content: string
     mood: string
     images?: string[]
+    /** Existing attachments, so the editor can tell them apart from new picks. */
+    attachments?: Array<{ id: number; fileUrl: string; thumbUrl?: string }>
   }
 }) {
   const knownMoodKeys = useMemo(() => new Set(MOODS.filter((m) => m.key !== 'custom').map((m) => m.key)), [])
@@ -475,6 +483,12 @@ function BottomDrawer({
   const [selectedMood, setSelectedMood] = useState<string | null>(initialIsCustom ? 'custom' : (initialData?.mood ?? null))
   const [customMood, setCustomMood] = useState(initialIsCustom ? initialMood : '')
   const [textValue, setTextValue] = useState(initialData?.content ?? '')
+  // Editing starts from the entry's stored attachments; creating starts empty.
+  // Both live in one list so the grid, the 9-image cap, and removal all work
+  // the same way regardless of mode.
+  const [existingAttachments, setExistingAttachments] = useState<
+    Array<{ id: number; fileUrl: string; thumbUrl?: string }>
+  >(initialData?.attachments ?? [])
   const [images, setImages] = useState<string[]>(initialData?.images ?? [])
   const [imageFiles, setImageFiles] = useState<File[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -484,6 +498,9 @@ function BottomDrawer({
   const customInputRef = useRef<HTMLInputElement>(null)
   const keyboardHeight = useKeyboardHeight()
   const isEdit = mode === 'edit'
+
+  // Total images shown = existing (edit) + newly picked
+  const totalImages = existingAttachments.length + images.length
 
   // Lock body scroll when drawer is open.
   // We avoid position:fixed on the body because it causes layout jumps on
@@ -538,9 +555,10 @@ function BottomDrawer({
 
     setIsSubmitting(true)
 
-    // Upload image files to the server only when creating a new entry
+    // Upload newly picked files in both modes. Editing used to skip this
+    // entirely, which is why images could not be added to an existing entry.
     let uploadedAttachments: UploadedAttachment[] | undefined
-    if (!isEdit && imageFiles.length > 0) {
+    if (imageFiles.length > 0) {
       uploadedAttachments = []
       for (const file of imageFiles) {
         try {
@@ -569,13 +587,30 @@ function BottomDrawer({
       }
     }
 
+    const hasAnyImage = existingAttachments.length > 0 || (uploadedAttachments?.length ?? 0) > 0
+
+    // Existing attachments the user removed in the editor. Only meaningful in
+    // edit mode — there is nothing to remove when creating.
+    const originalIds = (initialData?.attachments ?? []).map((a) => a.id)
+    const keptIds = new Set(existingAttachments.map((a) => a.id))
+    const removedAttachmentIds = isEdit
+      ? originalIds.filter((id) => !keptIds.has(id))
+      : []
+
     try {
-      await onSubmit({
-        type: isEdit ? (images.length > 0 ? 'mixed' : 'text') : (imageFiles.length > 0 ? 'mixed' : 'text'),
-        content: textValue.trim(),
-        images: isEdit ? images : uploadedAttachments?.map((a) => a.fileUrl),
-        mood: finalMood,
-      }, uploadedAttachments)
+      await onSubmit(
+        {
+          type: hasAnyImage ? 'mixed' : 'text',
+          content: textValue.trim(),
+          images: [
+            ...existingAttachments.map((a) => a.fileUrl),
+            ...(uploadedAttachments?.map((a) => a.fileUrl) ?? []),
+          ],
+          mood: finalMood,
+        },
+        uploadedAttachments,
+        removedAttachmentIds,
+      )
 
       setShowSuccess(true)
       await new Promise((r) => setTimeout(r, 400))
@@ -585,7 +620,17 @@ function BottomDrawer({
     } finally {
       setIsSubmitting(false)
     }
-  }, [selectedMood, customMood, textValue, imageFiles, images, isEdit, onSubmit, handleClose])
+  }, [
+    selectedMood,
+    customMood,
+    textValue,
+    imageFiles,
+    existingAttachments,
+    initialData?.attachments,
+    isEdit,
+    onSubmit,
+    handleClose,
+  ])
 
   const canSubmit = selectedMood !== null && (selectedMood !== 'custom' || customMood.trim().length > 0) && textValue.trim().length > 0
 
@@ -593,28 +638,38 @@ function BottomDrawer({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files
       if (!files) return
-      Array.from(files).forEach((file) => {
-        if (images.length >= 9) return
+      // Respect the 9-image cap across existing and newly picked files
+      const room = 9 - existingAttachments.length - images.length
+      Array.from(files).slice(0, Math.max(0, room)).forEach((file) => {
         const url = URL.createObjectURL(file)
         setImages((prev) => [...prev, url])
         setImageFiles((prev) => [...prev, file])
       })
+      // Allow re-picking the same file after removing it
+      e.target.value = ''
     },
-    [images.length]
+    [existingAttachments.length, images.length]
   )
 
-  const removeImage = useCallback((index: number) => {
-    setImages((prev) => {
-      const next = [...prev]
-      next.splice(index, 1)
-      return next
-    })
-    setImageFiles((prev) => {
-      const next = [...prev]
-      next.splice(index, 1)
-      return next
-    })
-  }, [])
+  /**
+   * Remove an image from the editor.
+   *
+   * The grid shows existing attachments first, then new picks, so the index
+   * decides which list to touch. Existing ones are only unlinked from the
+   * entry — the actual file is deleted server-side on save.
+   */
+  const removeImage = useCallback(
+    (index: number) => {
+      if (index < existingAttachments.length) {
+        setExistingAttachments((prev) => prev.filter((_, i) => i !== index))
+        return
+      }
+      const newIndex = index - existingAttachments.length
+      setImages((prev) => prev.filter((_, i) => i !== newIndex))
+      setImageFiles((prev) => prev.filter((_, i) => i !== newIndex))
+    },
+    [existingAttachments.length]
+  )
 
   return (
     <AnimatePresence>
@@ -800,9 +855,8 @@ function BottomDrawer({
                 </p>
               )}
 
-              {/* ── Step 3: Images (optional) — only when creating ── */}
-              {!isEdit && (
-                <>
+              {/* ── Step 3: Images (optional) — available when creating and editing ── */}
+              <>
                   <div className="mb-2 mt-5 flex items-center gap-2">
                     <span
                       className="text-xs font-medium"
@@ -817,7 +871,7 @@ function BottomDrawer({
                       ·可选
                     </span>
                   </div>
-                  {images.length === 0 ? (
+                  {totalImages === 0 ? (
                     <div
                       onClick={() => fileInputRef.current?.click()}
                       className="group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[var(--divider)] p-8 transition-all duration-200 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] active:scale-[0.98]"
@@ -838,28 +892,54 @@ function BottomDrawer({
                     </div>
                   ) : (
                     <div className="grid grid-cols-3 gap-2">
-                      {images.map((img, i) => (
+                      {/* Existing attachments first, then new picks. The index
+                          passed to removeImage matches that order. */}
+                      {existingAttachments.map((att, i) => (
                         <div
-                          key={i}
+                          key={`existing-${att.id}`}
                           className="group relative aspect-square overflow-hidden rounded-xl"
                         >
                           <img
-                            src={img}
-                            alt={`预览 ${i + 1}`}
+                            src={att.thumbUrl ?? att.fileUrl}
+                            alt={`已有图片 ${i + 1}`}
                             className="h-full w-full object-cover"
                           />
                           <button
                             onClick={() => removeImage(i)}
                             className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition-transform active:scale-90"
+                            aria-label={`移除已有图片 ${i + 1}`}
                           >
                             <X size={16} />
                           </button>
                         </div>
                       ))}
-                      {images.length < 9 && (
+                      {images.map((img, i) => {
+                        const globalIndex = existingAttachments.length + i
+                        return (
+                          <div
+                            key={`new-${i}`}
+                            className="group relative aspect-square overflow-hidden rounded-xl"
+                          >
+                            <img
+                              src={img}
+                              alt={`预览 ${globalIndex + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              onClick={() => removeImage(globalIndex)}
+                              className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition-transform active:scale-90"
+                              aria-label={`移除新图片 ${i + 1}`}
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                        )
+                      })}
+                      {totalImages < 9 && (
                         <button
                           onClick={() => fileInputRef.current?.click()}
                           className="group flex aspect-square items-center justify-center rounded-xl border-2 border-dashed border-[var(--divider)] transition-all duration-200 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] active:scale-[0.98]"
+                          aria-label="添加图片"
                         >
                           <Plus size={24} className="text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]" />
                         </button>
@@ -875,7 +955,6 @@ function BottomDrawer({
                     onChange={handleFileSelect}
                   />
                 </>
-              )}
             </div>
 
             {/* Submit button */}
@@ -1131,6 +1210,7 @@ export default function Home() {
   // Convert server entries to the local Fragment type for rendering
   const serverFragments: Fragment[] = serverEntries.map((entry) => {
     const attachments = (entry as { attachments?: Array<{
+      id: number
       fileUrl: string
       thumbStoragePath?: string | null
       visionStatus: string
@@ -1153,6 +1233,12 @@ export default function Home() {
       visionModelUsed: a.visionModelUsed,
       createdAt: a.createdAt,
     }))
+    // Carried through to the editor so it can tell stored images from new picks
+    const attachmentRefs = attachments?.map((a, i) => ({
+      id: a.id,
+      fileUrl: a.fileUrl,
+      thumbUrl: thumbUrls?.[i],
+    }))
     return {
       id: String(entry.id),
       type: entry.hasImages ? (entry.contentText ? 'mixed' : 'image') : 'text',
@@ -1160,6 +1246,7 @@ export default function Home() {
       images: attachmentUrls && attachmentUrls.length > 0 ? attachmentUrls : undefined,
       thumbImages: thumbUrls && thumbUrls.length > 0 ? thumbUrls : undefined,
       attachmentMetas: attachmentMetas && attachmentMetas.length > 0 ? attachmentMetas : undefined,
+      attachmentRefs: attachmentRefs && attachmentRefs.length > 0 ? attachmentRefs : undefined,
       mood: (entry.moodLabel as MoodKey) || undefined,
       timestamp: formatTime(entry.createdAt),
     }
@@ -1195,7 +1282,11 @@ export default function Home() {
   }, [])
 
   const handleDrawerSubmit = useCallback(
-    async (data: Omit<Fragment, 'id' | 'timestamp'>, attachments?: UploadedAttachment[]) => {
+    async (
+      data: Omit<Fragment, 'id' | 'timestamp'>,
+      attachments?: UploadedAttachment[],
+      removedAttachmentIds?: number[],
+    ) => {
       if (!isAuthenticated) return
 
       if (editingFragment) {
@@ -1204,6 +1295,11 @@ export default function Home() {
           contentText: data.content!.trim(),
           moodLabel: data.mood!,
           entryDate: activeDate,
+          attachments: attachments && attachments.length > 0 ? attachments : undefined,
+          removedAttachmentIds:
+            removedAttachmentIds && removedAttachmentIds.length > 0
+              ? removedAttachmentIds
+              : undefined,
         })
       } else {
         await createEntry.mutateAsync({
@@ -1428,6 +1524,7 @@ export default function Home() {
                 content: editingFragment.content ?? '',
                 mood: editingFragment.mood ?? 'calm',
                 images: editingFragment.images,
+                attachments: editingFragment.attachmentRefs,
               }
             : undefined
         }

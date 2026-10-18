@@ -188,7 +188,7 @@ export async function findAttachmentsByEntryId(entryId: number) {
     .where(eq(entryAttachments.entryId, entryId));
 }
 
-function isValidStoragePath(userId: number, storagePath: string): boolean {
+export function isValidStoragePath(userId: number, storagePath: string): boolean {
   // Prevent path traversal and cross-user access
   // storagePath must be either "<userId>/<fileName>" or
   // "<userId>/thumb/<fileName>" (derived previews live in a subfolder).
@@ -208,7 +208,7 @@ function isValidStoragePath(userId: number, storagePath: string): boolean {
   return true;
 }
 
-function isValidAttachmentFileUrl(
+export function isValidAttachmentFileUrl(
   storagePath: string,
   fileUrl: string,
 ): boolean {
@@ -291,4 +291,58 @@ export async function updateAttachmentVision(
     .update(entryAttachments)
     .set(data)
     .where(eq(entryAttachments.id, attachmentId));
+}
+
+/**
+ * Remove one attachment and its files from disk.
+ *
+ * Scoped by both entry and user so a crafted attachment id cannot delete
+ * another person's photo. `hasImages` is recomputed afterwards rather than
+ * blindly cleared, because an entry may still have other images.
+ */
+export async function deleteAttachment(
+  userId: number,
+  entryId: number,
+  attachmentId: number,
+): Promise<boolean> {
+  const db = getDb();
+
+  const rows = await db
+    .select({
+      id: entryAttachments.id,
+      storagePath: entryAttachments.storagePath,
+      thumbStoragePath: entryAttachments.thumbStoragePath,
+    })
+    .from(entryAttachments)
+    .innerJoin(entries, eq(entryAttachments.entryId, entries.id))
+    .where(
+      and(
+        eq(entryAttachments.id, attachmentId),
+        eq(entryAttachments.entryId, entryId),
+        eq(entries.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  const row = rows.at(0);
+  if (!row) return false;
+
+  await db
+    .delete(entryAttachments)
+    .where(eq(entryAttachments.id, attachmentId));
+
+  deleteStoredFiles(row.storagePath, row.thumbStoragePath);
+
+  const remaining = await db
+    .select({ id: entryAttachments.id })
+    .from(entryAttachments)
+    .where(eq(entryAttachments.entryId, entryId))
+    .limit(1);
+
+  await db
+    .update(entries)
+    .set({ hasImages: remaining.length > 0 })
+    .where(eq(entries.id, entryId));
+
+  return true;
 }
