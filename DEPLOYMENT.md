@@ -303,3 +303,53 @@ npm test && npm run check               # 可选：跑测试和类型检查
 ```
 
 Docker 部署的更新流程见 [README](./README.md)：`docker compose up -d --build`。
+
+---
+
+## 9. 分支与维护（个人自用 fork）
+
+这个仓库（`lb290/Night-Journal`）是**个人自用部署**，不向上游提交：
+
+| 约定 | 做法 |
+|---|---|
+| 分支模型 | 只有一条长期分支 `master`；本地目录就是 `fork/master` 的检出 |
+| 提交去向 | 只推 `fork`（`git@github.com:lb290/Night-Journal.git`），**不提 PR、不推 `origin`** |
+| 推送方式 | 见 [AGENTS.md](./AGENTS.md) 的「维护约定」，需要 `GIT_SSH_COMMAND` 指定 `.ssh-nj` 密钥 |
+| 合并策略 | 线性历史优先（`rebase` + `--ff-only`），不留悬挂分支 |
+| 提交门槛 | `npm run check` + `npx vitest run` 全绿；改完构建后 `./scripts/nj-local.sh build && ./scripts/nj-local.sh restart` |
+
+日常更新一台已经跑着的机器：
+
+```bash
+cd Night-Journal
+git pull                                  # 从 fork/master 拉最新
+npm ci                                    # 依赖有变化时
+./scripts/nj-local.sh migrate             # schema 有变化时
+./scripts/nj-local.sh build
+./scripts/nj-local.sh restart
+```
+
+**可选：从上游同步**（上游有值得拿的改动时）
+
+```bash
+git fetch origin
+git merge origin/master                   # 解决冲突后
+./scripts/nj-local.sh build && ./scripts/nj-local.sh restart
+git push fork master
+```
+
+**回滚**：`git revert <sha>`（保留历史）或 `git reset --hard <sha>`（本地未推送时）。
+
+**2026-10-18 分支收敛记录**：原先散着 4 条分支、0 个 PR，已全部合并进 `master`（线性历史）并从本地和远端删除。需要时可用下面的 SHA 恢复：
+
+| 原分支 | 收敛时 SHA | 内容 |
+|---|---|---|
+| `fix/timezone-and-newline` | `fa5f25b` | 日期/时区修复 + 私有地址白名单 |
+| `feat/workbuddy-channel` | `94bcb7a` | 上面 3 个提交 + WorkBuddy 通道/登录面板 + cookie/字号修复 |
+| `fix/diary-manual-generation-entrypoints` | `78a311b` | 手动「生成日记 / 重新生成」入口修复（含测试） |
+| `docs/local-deployment` | `7343ab5` | 本文档 + `scripts/nj-local.sh` |
+
+```bash
+# 例：把某条旧分支恢复出来看看
+git branch restore/old <sha> && git push fork restore/old
+```

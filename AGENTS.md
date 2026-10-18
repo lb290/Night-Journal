@@ -20,6 +20,26 @@
 
 ---
 
+## 维护约定（个人自用 fork · 优先级最高）
+
+本仓库是 `lb290` 账号下的**个人自用部署**，不是向上游贡献的仓库。以下约定优先于 `CONTRIBUTING.md` 里的 PR 流程：
+
+1. **不提 PR、不推上游**。不要向上游 `Haaaiawd/Night-Journal` 提 PR，也不要 `git push origin`。所有提交只进 `fork` = `git@github.com:lb290/Night-Journal.git`。
+2. **只有一条长期分支 `master`**。改动直接提交到 `master` 并推送；临时分支用完就删，不留悬挂分支。
+3. **推送用的密钥**（本机）：
+   ```bash
+   export GIT_SSH_COMMAND="ssh -i /Users/bing/Documents/workspeace/.ssh-nj/id_ed25519 \
+     -o UserKnownHostsFile=/Users/bing/Documents/workspeace/.ssh-nj/known_hosts \
+     -o IdentitiesOnly=yes"
+   git push fork master
+   ```
+4. **提交前必须绿**：`npm run check` + `npx vitest run`；改了前端或后端后跑 `./scripts/nj-local.sh build`，再 `./scripts/nj-local.sh restart` 让运行中的服务用上新构建。
+5. **收尾时工作区要干净**：本地目录始终是 `fork/master` 的检出，不要留未提交改动。
+6. 部署、日志、备份、排错见 `DEPLOYMENT.md`；本机一键启停用 `./scripts/nj-local.sh`。
+7. 可选的上游同步：`git fetch origin && git merge origin/master`（合并后照常推到 `fork`）。
+
+---
+
 ## 地图 (领地感知)
 
 以下是这个项目的组织方式：

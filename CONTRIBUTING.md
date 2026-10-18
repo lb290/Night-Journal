@@ -1,5 +1,7 @@
 # CONTRIBUTING — Night-Journal 协作规范
 
+> ⚠️ **本 fork（`lb290/Night-Journal`）是个人自用仓库：不提 PR、不推上游，改动直接进 `master`。** 见 [AGENTS.md](./AGENTS.md) 的「维护约定」，那条优先于本文的 PR 流程。下面的分支命名与 commit 格式仍然适用。
+
 > 本规范同时面向人类协作者和 AI agent。Agent 接手项目时，**必须按本规范执行分支、commit、PR 全流程**。
 
 ---
