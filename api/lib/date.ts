@@ -77,3 +77,52 @@ export function monthRange(year: number, month: number): { start: string; end: s
     end: `${nextYear}-${pad(nextMonth)}-01`,
   };
 }
+
+/** Default zone for a self-hosted, single-household deployment. */
+export const DEFAULT_TIME_ZONE = "Asia/Shanghai";
+
+/**
+ * Render an instant as a wall-clock time in the user's own timezone.
+ *
+ * `Date#toISOString()` produces UTC, which is the wrong thing to hand a model
+ * that is asked about "when was this recorded": a fragment saved at 19:09 in
+ * UTC+8 was described as "上午十一点左右" because the vision model received
+ * "11:09Z" with no zone attached and assumed it was local time.
+ *
+ * The output is deliberately explicit — "2026-10-18 19:09" plus the zone — so
+ * the model cannot silently reinterpret it as UTC.
+ *
+ * @param instant  The moment to render.
+ * @param timeZone IANA zone; falls back to DEFAULT_TIME_ZONE when unset/invalid.
+ */
+export function formatLocalDateTime(
+  instant: Date,
+  timeZone: string | null | undefined = DEFAULT_TIME_ZONE,
+): string {
+  const zone = isValidTimeZone(timeZone) ? (timeZone as string) : DEFAULT_TIME_ZONE;
+
+  // sv-SE renders as "YYYY-MM-DD HH:mm", which is both unambiguous and the
+  // format the prompts already use for dates.
+  const formatted = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(instant);
+
+  return `${formatted}（${zone}）`;
+}
+
+/** Guard against an invalid IANA name reaching Intl and throwing. */
+export function isValidTimeZone(timeZone: string | null | undefined): boolean {
+  if (!timeZone || typeof timeZone !== "string") return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}

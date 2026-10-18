@@ -16,6 +16,7 @@ import {
 import { findAiSettingsByUserId } from "../queries/ai-settings";
 import { callVisionModel } from "../lib/openai";
 import { readFileAsBase64 } from "../lib/upload";
+import { formatLocalDateTime } from "../lib/date";
 import { DEFAULT_VISION_PROMPT } from "@contracts/prompts";
 
 export const entriesRouter = createRouter({
@@ -208,6 +209,16 @@ async function triggerVisionAnalysis(
 ) {
   const settings = await findAiSettingsByUserId(userId);
 
+  // The prompt asks the model to reason about "when this was recorded", so the
+  // timestamp has to be the user's wall-clock time, not UTC. Sending
+  // toISOString() made a 19:09 fragment read as 11:09, and the model wrote
+  // "上午十一点左右" into the diary — a fact the user never recorded.
+  const entry = await findEntryById(userId, entryId);
+  const recordedAt = formatLocalDateTime(
+    entry?.createdAt ?? new Date(),
+    settings?.timezone,
+  );
+
   // Determine whether vision analysis is actually configured.
   // If not, we must still terminate the pending state on every attachment,
   // otherwise the UI loader spins forever (see seed-01: throw/return before
@@ -247,7 +258,7 @@ async function triggerVisionAnalysis(
       }
 
       const mimeType = dbAtt.fileType || "image/jpeg";
-      const fullPrompt = `${prompt}\n\n关联文字: ${contextText}\n创建时间: ${new Date().toISOString()}`;
+      const fullPrompt = `${prompt}\n\n关联文字: ${contextText}\n创建时间: ${recordedAt}`;
 
       const rawResult = await callVisionModel({
         apiKey,

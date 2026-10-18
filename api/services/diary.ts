@@ -226,6 +226,70 @@ function decodeEscapedNewlines(text: string): string {
     .replace(/\\t/g, "\t");
 }
 
+/**
+ * Titles that carry no information: a bare date, or a generic word like
+ * "日记" / "记录". The model produces these when it cannot find an angle, and
+ * they are worse than useless in a list of diaries — every entry looks alike.
+ */
+const DATE_ONLY_TITLE =
+  /^\s*(?:\d{4}\s*[年\-/.]\s*)?\d{1,2}\s*[月\-/.]\s*\d{1,2}\s*日?\s*$/;
+const CHINESE_DATE_TITLE =
+  /^\s*(?:\d{4}\s*年\s*)?[一二三四五六七八九十元正冬腊]{1,3}月[初十廿三]{0,2}[一二三四五六七八九十]{1,3}日?\s*$/;
+/** "十月" / "10月" on its own is still a date, not a title. */
+const MONTH_ONLY_TITLE = /^\s*(?:\d{4}\s*年\s*)?(?:\d{1,2}|[一二三四五六七八九十元正冬腊]{1,3})\s*月\s*$/;
+const GENERIC_TITLES = new Set([
+  "日记",
+  "记录",
+  "今天",
+  "今日",
+  "一天",
+  "日常",
+  "无题",
+  "随记",
+  "碎碎念",
+]);
+
+/**
+ * Whether a title is worth keeping.
+ *
+ * This is a safety net, not the main fix: the prompt tells the model how to
+ * write a title, but models regress. Rejecting the obvious non-titles here
+ * means a bad title never reaches the database.
+ */
+export function isUsableTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return false;
+  if (DATE_ONLY_TITLE.test(t)) return false;
+  if (CHINESE_DATE_TITLE.test(t)) return false;
+  if (MONTH_ONLY_TITLE.test(t)) return false;
+  if (GENERIC_TITLES.has(t)) return false;
+  // A title is a phrase, not a paragraph
+  if (t.length > 24) return false;
+  return true;
+}
+
+/**
+ * Derive a fallback title from the diary body.
+ *
+ * Used only when the model returns something unusable. Takes the first
+ * clause of the first non-empty paragraph, which is the closest thing to the
+ * day's opening beat, and trims it to a title-sized phrase.
+ */
+export function deriveFallbackTitle(content: string): string {
+  const firstParagraph = content
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstParagraph) return "无题";
+
+  // Cut at the first sentence break, then cap the length
+  const firstClause = firstParagraph.split(/[。！？；，,]/)[0]?.trim() ?? "";
+  const candidate = (firstClause || firstParagraph).replace(/\s+/g, " ").trim();
+
+  if (candidate.length <= 12) return candidate;
+  return candidate.slice(0, 12);
+}
+
 export function parseDiaryResponse(
   content: string,
 ): { title: string; summary: string; content: string } | null {
@@ -238,7 +302,12 @@ export function parseDiaryResponse(
     const rawContent = typeof parsed.content === "string" ? parsed.content.trim() : "";
     const diaryContent = decodeEscapedNewlines(rawContent).trim();
     if (!title || !diaryContent) return null;
-    return { title, summary, content: diaryContent };
+
+    // A date-as-title ("十月十八日") tells the reader nothing. Prefer a title
+    // derived from the body over storing something meaningless.
+    const finalTitle = isUsableTitle(title) ? title : deriveFallbackTitle(diaryContent);
+
+    return { title: finalTitle, summary, content: diaryContent };
   } catch (err) {
     console.error("[diary] Failed to parse JSON response:", err);
     return null;
