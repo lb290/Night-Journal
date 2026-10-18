@@ -10,6 +10,7 @@ import {
   Trash2,
   ChevronDown,
   Sparkles,
+  Pencil,
 } from "lucide-react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +19,7 @@ import { zhCN } from "date-fns/locale";
 import { Drawer } from "vaul";
 import { toast } from "sonner";
 import { ImageViewer, type ViewerImage } from "@/components/ImageViewer";
+import { DiaryEditor, type DiaryDraft } from "@/components/DiaryEditor";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -526,6 +528,7 @@ function DraftDiaryView({
 function MoreActionMenu({
   open,
   onClose,
+  onEdit,
   onCopy,
   onExport,
   onDelete,
@@ -533,12 +536,22 @@ function MoreActionMenu({
 }: {
   open: boolean;
   onClose: () => void;
+  onEdit: () => void;
   onCopy: () => void;
   onExport: () => void;
   onDelete: () => void;
   isDeleting: boolean;
 }) {
   const menuItems = [
+    {
+      label: "编辑日记",
+      icon: Pencil,
+      color: "var(--text-primary)",
+      action: () => {
+        onEdit();
+        onClose();
+      },
+    },
     {
       label: "复制全文",
       icon: Copy,
@@ -631,6 +644,7 @@ export default function DiaryDetail() {
 
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const { scrollY } = useScroll({ container: scrollRef });
@@ -686,6 +700,17 @@ export default function DiaryDetail() {
     },
   });
 
+  const updateContentMutation = trpc.diaries.updateContent.useMutation({
+    onSuccess: () => {
+      toast.success("已保存");
+      setEditorOpen(false);
+      refetchDiary();
+    },
+    onError: () => {
+      toast.error("保存失败，请重试");
+    },
+  });
+
   const deleteMutation = trpc.diaries.delete.useMutation({
     onSuccess: () => {
       toast.success("日记已删除");
@@ -728,11 +753,33 @@ export default function DiaryDetail() {
     }
   }, [diary, deleteMutation]);
 
+  const handleSaveEdit = useCallback(
+    async (draft: DiaryDraft) => {
+      if (!diary) return;
+      await updateContentMutation.mutateAsync({
+        id: diary.id,
+        title: draft.title,
+        summary: draft.summary,
+        content: draft.content,
+      });
+    },
+    [diary, updateContentMutation],
+  );
+
   const handleRegenerate = useCallback(() => {
     if (!date || isRegenerating) return;
+    // Regenerating replaces the whole text, including anything the user wrote
+    // by hand. The previous version is snapshotted, but the warning still
+    // matters — there is no in-app way to restore a version.
+    if (diary?.manuallyEdited) {
+      const ok = window.confirm(
+        "这篇日记你手动改过。重新生成会用 AI 的新内容覆盖你的修改（旧内容会存为历史版本）。继续吗？",
+      );
+      if (!ok) return;
+    }
     setIsRegenerating(true);
     regenerateMutation.mutate({ date });
-  }, [date, isRegenerating, regenerateMutation]);
+  }, [date, isRegenerating, regenerateMutation, diary?.manuallyEdited]);
 
   const handleGenerate = useCallback(() => {
     if (!date || generateMutation.isPending) return;
@@ -917,6 +964,7 @@ export default function DiaryDetail() {
           {generationTime && `AI 于 ${generationTime} 生成`}
           {generationTime && " · "}
           {diaryStyle}风格
+          {diary.manuallyEdited && " · 已手动编辑"}
         </motion.p>
 
         {/* Divider */}
@@ -1025,10 +1073,24 @@ export default function DiaryDetail() {
         </motion.button>
       </motion.section>
 
+      {/* ── Diary Editor ── */}
+      <DiaryEditor
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        initial={{
+          title: diary.title ?? "",
+          summary: diary.summary ?? "",
+          content: diary.content ?? "",
+        }}
+        onSave={handleSaveEdit}
+        isSaving={updateContentMutation.isPending}
+      />
+
       {/* ── More Action Menu ── */}
       <MoreActionMenu
         open={showActionMenu}
         onClose={() => setShowActionMenu(false)}
+        onEdit={() => setEditorOpen(true)}
         onCopy={handleCopy}
         onExport={handleExport}
         onDelete={handleDelete}
