@@ -88,6 +88,10 @@ describe("buildDiaryUserMessage", () => {
     expect(result).toContain("对这个用户的理解：内省、敏感");
     expect(result).toContain("语风参考：短句多");
     expect(result).toContain("[focus] 最近赶项目");
+    // The profile is inferred from earlier (AI-written) diaries, so the block
+    // must state that it is not a source of facts.
+    expect(result).toContain("不是事实来源");
+    expect(result).toContain("只以「今日碎片」为准");
   });
 
   it("renders an empty memory block when no memory data exists", () => {

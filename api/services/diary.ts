@@ -111,9 +111,12 @@ function renderImageSummaries(fragments: DiaryContext["fragments"]): string {
 
 /**
  * Render the Dream memory block. Injected only when a profile or short-term
- * memories exist. The wording explicitly tells the model NOT to restate these
- * facts; they are background understanding for continuity, not material to
- * narrate.
+ * memories exist.
+ *
+ * The wording is deliberately blunt: the profile is *inferred* from earlier
+ * (often AI-written) diaries, so it must never be treated as a source of
+ * facts. Without that warning the model happily narrates remembered details
+ * as if they happened today, which compounds its own earlier inventions.
  */
 function renderMemoryBlock(memory: DiaryMemory | null | undefined): string {
   if (!memory || (!memory.profileSummary && memory.shortTermMemories.length === 0)) {
@@ -130,7 +133,13 @@ function renderMemoryBlock(memory: DiaryMemory | null | undefined): string {
     const memLines = memory.shortTermMemories.map((m) => `- [${m.category}] ${m.content}`).join("\n");
     lines.push(`近期状态：\n${memLines}`);
   }
-  return `\n你对这个用户的了解（用于保持日记的连续性，不要直接复述或罗列，自然融入即可）：\n${lines.join("\n")}\n`;
+  return `
+以下是对这个用户的背景理解，**只用来理解他的语气和状态，不是事实来源**：
+- 不要把这里出现的任何具体情节、对话、物品、事件写成今天发生的事
+- 不要因为这里提到过，就在今天日记里补细节
+- 今天发生了什么，只以「今日碎片」为准
+${lines.join("\n")}
+`;
 }
 
 /**
@@ -172,7 +181,7 @@ export function buildDiaryUserMessage(context: DiaryContext, template: string): 
 语言：${language}
 日记风格：${style}
 风格说明：${stylePrompt}
-日记长度：${length}
+日记长度：${length}（仅供参考，实际篇幅以碎片信息量为准）
 ${memoryBlock}
 今日碎片：
 ${fragmentDescriptions}
@@ -180,6 +189,7 @@ ${fragmentDescriptions}
 图片摘要汇总：
 ${imageSummaries}
 
+说明：「今日碎片」和「图片摘要汇总」是唯一的事实来源；除它们之外的内容都只是参考资料，不得当作事实写进日记。
 请根据以上素材生成日记。`;
 
   const hasPlaceholder = DIARY_PLACEHOLDERS.some((p) => template.includes(p));
@@ -335,7 +345,10 @@ export async function generateDiaryForDate(userId: number, date: string): Promis
         { role: "user", content: userMessage },
       ],
       maxTokens: 2048,
-      temperature: 0.7,
+      // Low temperature on purpose: this is a faithful transcription task, not
+      // a creative one. Higher values made the model invent scenes, dialogue
+      // and props that were never recorded.
+      temperature: 0.3,
       timeoutMs: 120_000,
     });
 
