@@ -19,6 +19,10 @@
 #   NJ_MYSQLD      直接指定 mysqld 可执行文件
 #   NJ_LOG_DIR     日志与 PID 目录，默认 <仓库>/.logs
 #
+# 注意：脚本里的变量只要后面紧跟中文字符（或任何非 ASCII），一律写成 ${VAR}。
+# macOS 自带 bash 3.2 在 UTF-8 locale 下会把多字节字符吞进变量名，配合 set -u
+# 就会报 "PORT�: unbound variable"。
+#
 set -euo pipefail
 
 # ── 路径 ────────────────────────────────────────────────────────────
@@ -133,7 +137,7 @@ wait_for() { # wait_for <秒数> <描述> <命令...>
   local timeout="$1" label="$2"; shift 2
   local i
   for ((i = 1; i <= timeout; i++)); do
-    if "$@" >/dev/null 2>&1; then ok "$label（${i}s）"; return 0; fi
+    if "$@" >/dev/null 2>&1; then ok "${label}（${i}s）"; return 0; fi
     sleep 1
   done
   return 1
@@ -141,7 +145,7 @@ wait_for() { # wait_for <秒数> <描述> <命令...>
 
 # ── MySQL ───────────────────────────────────────────────────────────
 start_mysql() {
-  if mysql_up; then ok "MySQL 已在运行（端口 $DB_PORT）"; return 0; fi
+  if mysql_up; then ok "MySQL 已在运行（端口 ${DB_PORT}）"; return 0; fi
   [[ -n "$MYSQLD" ]] || die "找不到 mysqld。用 NJ_MYSQL_HOME 或 NJ_MYSQLD 指定 MySQL 位置。"
   [[ -d "$MYSQL_DATA" ]] || die "找不到数据目录：$MYSQL_DATA"
 
@@ -164,9 +168,9 @@ stop_mysql() {
   local pid; pid="$(mysql_pid || true)"
   if [[ -z "$pid" ]]; then info "MySQL 未运行"; return 0; fi
   if [[ ! -f "$MYSQL_PID_FILE" ]]; then
-    warn "没有 $MYSQL_PID_FILE，将按端口 $DB_PORT 停掉监听的进程"
+    warn "没有 ${MYSQL_PID_FILE}，将按端口 $DB_PORT 停掉监听的进程"
   fi
-  info "停止 MySQL（PID $pid，SIGTERM 即正常关闭）"
+  info "停止 MySQL（PID ${pid}，SIGTERM 即正常关闭）"
   kill -TERM "$pid" 2>/dev/null || true
   local i
   for ((i = 1; i <= 30; i++)); do
@@ -180,13 +184,13 @@ stop_mysql() {
 # ── 应用 ────────────────────────────────────────────────────────────
 start_app() {
   local pid; pid="$(app_pid || true)"
-  if [[ -n "$pid" ]]; then ok "服务已在运行（PID $pid，端口 $PORT）"; return 0; fi
+  if [[ -n "$pid" ]]; then ok "服务已在运行（PID ${pid}，端口 ${PORT}）"; return 0; fi
   command -v node >/dev/null 2>&1 || die "找不到 node，请先安装 Node 22，或把 node 加入 PATH（nvm 用户先 source ~/.nvm/nvm.sh）"
-  [[ -f "$APP_ENTRY" ]] || die "缺少构建产物 $APP_ENTRY，先执行：./scripts/nj-local.sh build"
+  [[ -f "$APP_ENTRY" ]] || die "缺少构建产物 ${APP_ENTRY}，先执行：./scripts/nj-local.sh build"
   [[ -f "$REPO_DIR/.env" ]] || die "缺少 $REPO_DIR/.env（可从 .env.example 复制，填好 APP_SECRET / DATABASE_URL）"
 
   mkdir -p "$LOG_DIR"
-  info "启动服务：node dist/boot.js（端口 $PORT，日志 $APP_LOG）"
+  info "启动服务：node dist/boot.js（端口 ${PORT}，日志 ${APP_LOG}）"
   cd "$REPO_DIR"
   NODE_ENV=production PORT="$PORT" nohup node "$APP_ENTRY" >>"$APP_LOG" 2>&1 &
   echo $! >"$APP_PID_FILE"
@@ -200,7 +204,7 @@ start_app() {
 stop_app() {
   local pid; pid="$(app_pid || true)"
   if [[ -z "$pid" ]]; then info "服务未运行"; rm -f "$APP_PID_FILE"; return 0; fi
-  info "停止服务（PID $pid）"
+  info "停止服务（PID ${pid}）"
   kill -TERM "$pid" 2>/dev/null || true
   local i
   for ((i = 1; i <= 15; i++)); do
@@ -222,15 +226,15 @@ cmd_stop() { stop_app; stop_mysql; }
 cmd_run() {
   start_mysql
   command -v node >/dev/null 2>&1 || die "找不到 node，请先安装 Node 22，或把 node 加入 PATH"
-  [[ -f "$APP_ENTRY" ]] || die "缺少构建产物 $APP_ENTRY，先执行：./scripts/nj-local.sh build"
+  [[ -f "$APP_ENTRY" ]] || die "缺少构建产物 ${APP_ENTRY}，先执行：./scripts/nj-local.sh build"
   [[ -f "$REPO_DIR/.env" ]] || die "缺少 $REPO_DIR/.env"
   cd "$REPO_DIR"
-  info "前台运行 node dist/boot.js（端口 $PORT，Ctrl-C 退出）"
+  info "前台运行 node dist/boot.js（端口 ${PORT}，Ctrl-C 退出）"
   exec env NODE_ENV=production PORT="$PORT" node "$APP_ENTRY"
 }
 
 cmd_restart() {
-  info "重启晚记（端口 $PORT）"
+  info "重启晚记（端口 ${PORT}）"
   stop_app || true
   stop_mysql || true
   start_mysql
@@ -291,5 +295,5 @@ case "${1:-restart}" in
   build)   cmd_build ;;
   migrate | push) cmd_migrate ;;
   -h | --help | help) cmd_help ;;
-  *) die "未知命令：$1（可用：start|stop|restart|run|status|logs|build|migrate）" ;;
+  *) die "未知命令：${1}（可用：start|stop|restart|run|status|logs|build|migrate）" ;;
 esac
