@@ -101,12 +101,15 @@
 
 ## 当前状态
 
-- **最近一次更新**: 2026 — 新增账号密码登录、Docker 一键部署（自动迁移）、Dream 记忆机制
-- **认证**: 账号密码（bcrypt cost=12），统一 JWT session
-- **数据库迁移**: 自动 — 容器启动时由 `entrypoint.sh` 执行 `drizzle-kit push`（schema diff，幂等可重跑；不要手动跑 `migrate`，生成的 SQL 文件缺 `IF NOT EXISTS` 会撞表）
-- **部署方式**: `docker compose up -d --build` 即完成全部，无需手动建表
-- **Dream 记忆机制**: 日记生成后异步提炼用户画像（人格/关系/情绪/语风）+ 短期记忆（14天衰减），注入后续日记 prompt 提供连续性。Settings "记忆" tab 可只读+删除。`aiSettings.enableDream` 开关控制
-- **测试状态**: 单元测试（vitest）覆盖账号密码注册/登录、JWT、env、diaries、memories 路由、Dream 响应解析
+- **最近一次更新**: 2026-10-18 — 分支收敛为单条 `master`（个人自用 fork，不提 PR）；新增 WorkBuddy 模型通道、本机部署指南与一键启停脚本
+- **认证**: 账号密码（bcrypt cost=12），统一 JWT session（HS256，30 天）；纯 HTTP 局域网访问也能带上 cookie
+- **数据库迁移**: 统一用 `drizzle-kit push`（schema diff，幂等可重跑）；不要用 `migrate`，历史 SQL 缺 `IF NOT EXISTS` 会撞表。容器里由 `entrypoint.sh` 自动执行
+- **部署方式**: 两种 —— 服务器 `docker compose up -d --build`（自动建表）；本机直跑 `./scripts/nj-local.sh restart`。完整说明见 `DEPLOYMENT.md`
+- **模型通道**: 写日记/视觉模型支持 OpenAI 兼容端点与第一方 WorkBuddy 通道（`aiSettings.diaryProvider`）；内网/回环地址默认被 SSRF 防护拦截，需用 `ALLOW_PRIVATE_MODEL_HOSTS` 显式放行
+- **时区**: `DATE` 列按 `YYYY-MM-DD` 字符串绑定、`TIMESTAMP` 由连接层固定按 UTC 读写，非 UTC 主机不再错位（`api/lib/date.ts`、`api/queries/connection.ts`）
+- **图片**: 上传落本地磁盘（`data/uploads/`，单文件 ≤10MB），通过 `/api/uploads/<userId>/<file>` 鉴权读取；OSS/S3 仍未接
+- **Dream 记忆机制**: 日记生成后异步提炼用户画像（人格/关系/情绪/语风）+ 短期记忆（14 天衰减），注入后续日记 prompt 提供连续性。Settings「记忆」tab 可只读+删除，`aiSettings.enableDream` 开关控制
+- **测试状态**: vitest 17 个文件 / 123 passed | 3 skipped，覆盖认证/JWT/env、日期与时区、模型分发与 WorkBuddy、diaries/entries/memories 路由、日记与 Dream 响应解析
 
 ---
 
@@ -116,7 +119,7 @@
 |---|---|
 | 前端 | React 19, React Router v7, TanStack Query (via tRPC), Framer Motion, Tailwind CSS, shadcn/ui |
 | 后端 | Hono (Node http adapter), tRPC v11, Drizzle ORM |
-| 数据库 | MySQL 8.4 |
+| 数据库 | MySQL 8（本机验证 8.0.40，Compose 里用 8.4；字符集 utf8mb4） |
 | 认证 | 账号密码（bcrypt），统一 JWT session (HS256, 30天) |
 | 打包 | Vite (前端) + esbuild (后端) |
 
@@ -128,20 +131,24 @@
 # 安装依赖
 npm install
 
-# 启动开发服务器（前端 + 后端 concurrently）
+# 开发服务器：单个 Vite 进程同时托管前端和 api/boot.ts（@hono/vite-dev-server），端口 3000
 npm run dev
 
-# 类型检查
+# 类型检查 / 测试 / lint
 npm run check
+npm test
+npm run lint
 
-# 数据库迁移生成
-npm run db:generate
-
-# 数据库迁移推送
+# 数据库 schema 推送（不要用 db:migrate）
 npm run db:push
 
 # Drizzle Studio（可视化数据库）
 npm run db:studio
+
+# 本机生产模式的构建与启停（详见 DEPLOYMENT.md）
+./scripts/nj-local.sh build
+./scripts/nj-local.sh restart
+./scripts/nj-local.sh status
 ```
 
 ---
@@ -150,55 +157,55 @@ npm run db:studio
 
 ```text
 Night-Journal/
-├── api/                    # Hono 后端
-│   ├── boot.ts             # 路由注册入口（账号密码 + tRPC）
-│   ├── context.ts          # tRPC context（从 JWT cookie 解析用户）
-│   ├── middleware.ts        # authedQuery / createRouter 工厂
+├── api/                       # Hono 后端
+│   ├── boot.ts                # 入口：认证路由 + 上传/读取接口 + tRPC 挂载；生产模式托管 dist/public 并启动调度器
+│   ├── context.ts             # tRPC context（从 JWT cookie 解析用户）
+│   ├── middleware.ts          # authedQuery / adminQuery / createRouter 工厂（superjson transformer）
+│   ├── router.ts              # appRouter 汇总
 │   ├── auth/
-│   │   ├── password.ts     # POST /api/auth/register + /api/auth/login（bcrypt）
-│   │   └── session.ts      # JWT sign/verify
+│   │   ├── password.ts        # POST /api/auth/register + /api/auth/login（bcrypt cost=12）
+│   │   └── session.ts         # JWT sign/verify + authenticateRequest
 │   ├── lib/
-│   │   ├── env.ts          # 环境变量：APP_SECRET/DATABASE_URL 必填
-│   │   ├── cookies.ts      # session cookie 配置
-│   │   └── scheduler.ts    # 定时自动生成日记调度器
-│   ├── queries/            # Drizzle ORM 数据库查询
-│   │   ├── entries/
-│   │   ├── diaries/
-│   │   ├── ai-settings/
-│   │   └── users.ts        # 含 findUserByUsername / createLocalUser
+│   │   ├── env.ts             # APP_SECRET / DATABASE_URL 必填 + 私有地址白名单
+│   │   ├── date.ts            # DATE 列按 "YYYY-MM-DD" 字符串绑定，避免时区漂移
+│   │   ├── cookies.ts         # session cookie（纯 HTTP 局域网也能带上）
+│   │   ├── crypto.ts          # API key / WorkBuddy 凭据 AES-256-GCM 加解密
+│   │   ├── model-dispatch.ts  # 按 provider 分发：OpenAI 兼容端点 / WorkBuddy
+│   │   ├── openai.ts          # 对话与视觉调用
+│   │   ├── workbuddy/         # 第一方 WorkBuddy 通道：auth / chat / credential / product
+│   │   ├── url-guard.ts       # SSRF 防护（内网、回环默认拦截）
+│   │   ├── upload.ts          # 图片落盘 data/uploads，单文件 ≤10MB
+│   │   ├── scheduler.ts       # 每 60s：自动生成「昨天」的日记 + 记忆过期清理
+│   │   └── vite.ts            # 生产模式静态托管 + SPA 回退
+│   ├── queries/               # Drizzle 查询层
+│   │   ├── connection.ts      # 连接池（UTC 固定 + DATE 字符串）
+│   │   ├── entries/ diaries/ ai-settings/ memories/ model-presets/
+│   │   └── users.ts           # findUserByUsername / createLocalUser
 │   ├── services/
-│   │   └── diary.ts        # AI 日记生成：prompt 构建、LLM 调用、响应解析
-│   └── routers/            # tRPC 路由
-│       ├── entries.ts
-│       ├── diaries.ts      # 含 delete mutation
-│       ├── aiSettings.ts   # API key 不暴露给前端
-│       └── upload.ts       # TODO: OSS presigned URL
-├── src/                    # React 前端
-│   ├── pages/
-│   │   ├── Home.tsx        # 今日碎片，接入 trpc.entries.create/list
-│   │   ├── Diary.tsx       # 日记列表（infinite scroll）
-│   │   ├── DiaryDetail.tsx # 日记详情（含真正的 delete）
-│   │   ├── CalendarPage.tsx
-│   │   ├── Settings.tsx    # AI 模型配置
-│   │   ├── Login.tsx       # 账号密码登录
-│   │   └── Register.tsx    # 账号注册页
-│   ├── components/
-│   │   ├── Layout.tsx      # 主布局（含 BottomNav）
-│   │   └── BottomNav.tsx   # 四个 tab: 记录/日记/日历/我的
-│   ├── hooks/
-│   │   └── useAuth.ts      # 全局认证状态
-│   └── providers/
-│       └── trpc.ts         # tRPC client 配置
+│   │   ├── diary.ts           # 日记生成：prompt 构建、LLM 调用、响应解析、Dream 触发
+│   │   └── dream.ts           # 人物画像 + 短期记忆提炼
+│   └── routers/               # tRPC 路由：entries / diaries / aiSettings / memories / upload
+├── src/                       # React 前端
+│   ├── pages/                 # Home（记录碎片）/ Diary（列表）/ DiaryDetail / CalendarPage / Settings / Login / Register
+│   ├── components/            # Layout、BottomNav、WorkBuddySettings、AuthLayout、ui/（shadcn）
+│   ├── hooks/                 # useAuth / useTheme / useKeyboardHeight / use-mobile
+│   └── providers/trpc.tsx     # tRPC client 配置
 ├── db/
-│   ├── schema.ts           # Drizzle schema（users/entries/diaries/aiSettings）
-│   └── migrations/         # 迁移元数据（snapshot/journal 必须提交；SQL 文件被 gitignore，push 不读）
+│   ├── schema.ts              # users / entries / entry_attachments / diaries / diary_versions /
+│   │                          #   ai_settings / model_presets / user_profiles / short_term_memories
+│   ├── relations.ts           # Drizzle 关系定义
+│   └── migrations/            # 迁移元数据（snapshot/journal 必须提交；SQL 文件被 gitignore，push 不读）
 ├── contracts/
-│   ├── constants.ts        # 路径常量 + Session 配置
-│   └── errors.ts           # 错误码
-├── entrypoint.sh           # 容器启动脚本：drizzle-kit push → node dist/boot.js
-├── Dockerfile              # 多阶段构建：builder → runner (node:22-alpine)
-├── docker-compose.yml      # app + mysql:8.4，含 healthcheck
-└── .env.example            # 环境变量模板
+│   ├── constants.ts           # 路径常量 + Session 配置
+│   ├── prompts.ts             # 日记/风格/视觉/Dream 默认提示词与占位符
+│   ├── types.ts               # 共享类型
+│   └── errors.ts              # 错误码
+├── scripts/nj-local.sh        # 本机一键启停：start / stop / restart / run / status / logs / build / migrate
+├── DEPLOYMENT.md              # 部署与运维指南（本机 + Docker + 排错 + 分支维护）
+├── entrypoint.sh              # 容器启动脚本：drizzle-kit push → node dist/boot.js
+├── Dockerfile                 # 多阶段构建：builder → runner (node:22-alpine)
+├── docker-compose.yml         # app + mysql:8.4，含 healthcheck
+└── .env.example               # 环境变量模板
 ```
 
 ---
@@ -227,20 +234,25 @@ POST /api/auth/login  { username, password }
 
 ## 关键 TODO（功能未完成）
 
-1. **文件上传 OSS** — `api/routers/upload.ts` 返回 mock URL，需接入 Aliyun OSS / AWS S3 / MinIO
-2. ~~**AI 日记生成**~~ — 已实现（`api/services/diary.ts` + `api/lib/scheduler.ts`），支持手动触发和定时自动生成
-3. **API key 加密存储** — 已实现 AES-256-GCM + `APP_SECRET` 派生密钥加密存储
-4. **图片碎片持久化** — Home 页图片上传路径未打通，依赖 TODO 1
+1. **图片接对象存储** — 前端走 `POST /api/upload/file` 落本地磁盘（`api/lib/upload.ts` → `data/uploads/`）。换机或多实例部署前需要接 Aliyun OSS / AWS S3 / MinIO；`api/routers/upload.ts` 的 `upload.getUrl` 目前还是占位实现（前端没用它），接入时把它做成真正的预签名 URL
+2. **视觉理解依赖自配模型** — 附件识别链路已通（`entries.create` → `triggerVisionAnalysis` → `callVisionModel`），但用户必须在设置里配好视觉模型，否则只存图不做摘要
+3. ~~**AI 日记生成**~~ — 已实现：手动（`diaries.generate` / `diaries.regenerate`）与定时（`api/lib/scheduler.ts`，每 60s，只处理「昨天」）
+4. ~~**API key 加密存储**~~ — 已实现 AES-256-GCM（`api/lib/crypto.ts`），密钥由 `APP_SECRET` 派生
+5. ~~**图片碎片持久化**~~ — 已实现（本地磁盘 + `/api/uploads/<userId>/<file>` 鉴权读取）
 
 ---
 
 ## 数据库 Schema 要点
 
-- `entries`: 用户碎片（text + 情绪），`hasImages` 标记是否有附件，`softDeletedAt` 软删除
-- `entryAttachments`: 文件附件，`fileUrl` 为 OSS URL，`visionSummary` 为 AI 识别结果
-- `diaries`: AI 生成日记，`generationStatus: pending/generated/failed`，`manuallyEdited` 防止覆盖手动编辑
-- `diaryVersions`: 每次 regenerate 前快照
-- `aiSettings`: 用户 AI 配置，`visionApiKey` / `diaryApiKey` 明文存储（见 TODO 3）
+- `users`: 账号密码（`username` / `passwordHash`）+ `unionId`（本地账号为 `local:<username>`），`role` 区分 user/admin
+- `entries`: 碎片正文 + 情绪，`entryDate` 是 DATE 列（按字符串绑定），`hasImages` 标记有附件，`deletedAt` 软删除，`includedInDiary` 标记已写入日记
+- `entryAttachments`: 附件，`fileUrl` 为读取地址（`/api/uploads/...`），`storagePath` 为磁盘相对路径，`visionSummary` / `visionStatus` 存视觉识别结果
+- `diaries`: 一人一天一篇（`userId` + `diaryDate`），`generationStatus: pending/generated/failed`，`generationError` 是给用户看的脱敏错误，`manuallyEdited` 阻止自动覆盖
+- `diaryVersions`: 每次 regenerate 前快照旧内容
+- `aiSettings`: 每人一行。模型地址/模型名/提示词/风格/长度/`timezone`/`diaryGenerationTime`；`visionApiKey`、`diaryApiKey`、`diaryWorkbuddyCredential` 一律 **AES-256-GCM 加密存储**；`diaryProvider` 选 OpenAI 兼容或 WorkBuddy；`enableDream` 控制记忆机制
+- `modelPresets`: 用户保存的模型配置，便于切换
+- `userProfiles`: Dream 提炼的人物画像（人格/关系/情绪/语风/摘要），每人一行
+- `shortTermMemories`: 短期记忆（14 天衰减），调度器每天清理过期行
 
 ---
 
@@ -248,16 +260,16 @@ POST /api/auth/login  { username, password }
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `APP_SECRET` | ✅ | JWT 签名密钥，至少 32 位；`openssl rand -hex 32` |
-| `DATABASE_URL` | ✅ | MySQL 连接串（Compose 内置 MySQL 时用默认值即可） |
-| `APP_ID` | 可选 | Kimi 应用 ID，已不再需要 |
-| `KIMI_AUTH_URL` | 可选 | Kimi OAuth 服务地址 |
-| `KIMI_OPEN_URL` | 可选 | Kimi Open API 地址 |
-| `OWNER_UNION_ID` | 可选 | 管理员 union_id（本地账号格式 `local:<username>`） |
+| `APP_SECRET` | ✅ | JWT 签名密钥，同时用于派生 API key 的加密密钥；≥32 位，`openssl rand -hex 32`。**换掉它会导致已存的第三方密钥解不开** |
+| `DATABASE_URL` | ✅ | `mysql://user:pass@host:port/db`（Compose 内置 MySQL 时用默认值） |
+| `NODE_ENV` | 生产必填 | `production` 时才托管 `dist/public` 并启用调度器（`npm start` 已带） |
 | `PORT` | 可选 | 监听端口，默认 3000 |
-| `ENABLE_AUTO_GENERATION_IN_DEV` | 可选 | 设为 `true` 时在开发模式下启用自动日记生成调度器（生产环境默认启用） |
+| `OWNER_UNION_ID` | 可选 | 管理员 union_id，本地账号格式 `local:<username>` |
+| `ENABLE_AUTO_GENERATION_IN_DEV` | 可选 | 开发模式下也启用自动生成调度器（生产环境本来就启用） |
+| `ALLOW_PRIVATE_MODEL_HOSTS` | 可选 | 允许模型地址指向内网/回环，逗号分隔 `host:port`；只有自建本地模型网关才需要 |
+| `UPLOAD_DIR` | 可选 | 图片落盘目录，默认相对启动目录的 `data/uploads` |
 
-完整示例见 `.env.example`。`VITE_*` 变量已废弃，前端不使用 Vite 环境变量。
+完整示例见 `.env.example`，部署与运维细节见 `DEPLOYMENT.md`。早期的 `APP_ID` / `KIMI_*` 已废弃，`VITE_*` 前端不再使用。
 
 <!-- AUTO:END -->
 
