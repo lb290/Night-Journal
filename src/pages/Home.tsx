@@ -48,6 +48,8 @@ interface Fragment {
   type: 'text' | 'image' | 'mixed'
   content?: string
   images?: string[]
+  /** 400 px previews, parallel to `images`; used by the multi-image grid. */
+  thumbImages?: string[]
   attachmentMetas?: AttachmentMeta[]
   mood?: MoodKey
   timestamp: string
@@ -58,6 +60,8 @@ interface UploadedAttachment {
   fileType: string
   fileName: string
   storagePath: string
+  thumbStoragePath?: string | null
+  fileSize?: number | null
 }
 
 type MoodKey = string
@@ -379,6 +383,12 @@ function FragmentCard({
         >
           {fragment.images.map((img, i) => {
             const single = fragment.images!.length === 1
+            // The grid renders small squares; load the 400 px preview there
+            // instead of the full image. The single-image view is worth the
+            // full resolution.
+            const src = single
+              ? img
+              : (fragment.thumbImages?.[i] ?? img)
             return (
               <motion.div
                 key={i}
@@ -391,7 +401,7 @@ function FragmentCard({
                 {/* Single image keeps its natural aspect ratio so nothing is
                     cropped; grid thumbs letterbox instead of cropping. */}
                 <img
-                  src={img}
+                  src={src}
                   alt={`图片 ${i + 1}`}
                   loading="lazy"
                   className={
@@ -523,9 +533,13 @@ function BottomDrawer({
             const data = await res.json()
             uploadedAttachments.push({
               fileUrl: data.fileUrl,
-              fileType: file.type,
+              // The server normalises every upload to JPEG; fall back to the
+              // browser-reported type if the response is from an older build.
+              fileType: data.fileType ?? file.type,
               fileName: data.fileName,
               storagePath: data.storagePath,
+              thumbStoragePath: data.thumbStoragePath ?? null,
+              fileSize: data.fileSize ?? null,
             })
           }
         } catch (err) {
@@ -1097,6 +1111,7 @@ export default function Home() {
   const serverFragments: Fragment[] = serverEntries.map((entry) => {
     const attachments = (entry as { attachments?: Array<{
       fileUrl: string
+      thumbStoragePath?: string | null
       visionStatus: string
       visionSummary?: string
       visionModelUsed?: string
@@ -1105,6 +1120,11 @@ export default function Home() {
     const attachmentUrls = attachments
       ?.map((a) => a.fileUrl)
       .filter(Boolean)
+    // Thumbnails live next to their image and share the same authenticated
+    // read route, so the URL is derived from the stored path.
+    const thumbUrls = attachments
+      ?.map((a) => (a.thumbStoragePath ? `/api/uploads/${a.thumbStoragePath}` : undefined))
+      .filter(Boolean) as string[] | undefined
     const attachmentMetas = attachments?.map((a) => ({
       fileUrl: a.fileUrl,
       visionStatus: a.visionStatus,
@@ -1117,6 +1137,7 @@ export default function Home() {
       type: entry.hasImages ? (entry.contentText ? 'mixed' : 'image') : 'text',
       content: entry.contentText || undefined,
       images: attachmentUrls && attachmentUrls.length > 0 ? attachmentUrls : undefined,
+      thumbImages: thumbUrls && thumbUrls.length > 0 ? thumbUrls : undefined,
       attachmentMetas: attachmentMetas && attachmentMetas.length > 0 ? attachmentMetas : undefined,
       mood: (entry.moodLabel as MoodKey) || undefined,
       timestamp: formatTime(entry.createdAt),

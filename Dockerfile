@@ -11,8 +11,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 # Install everything — devDeps are needed here for the build
-# and for drizzle-kit which we carry into the runner
-RUN npm ci --registry https://registry.npmmirror.com
+# and for drizzle-kit which we carry into the runner.
+# sharp ships prebuilt linuxmusl binaries, so no native toolchain is required;
+# --include=optional is explicit because sharp's platform packages are optional
+# dependencies and some npm settings drop them.
+RUN npm ci --include=optional --registry https://registry.npmmirror.com
 
 # Copy the rest of the source
 COPY . .

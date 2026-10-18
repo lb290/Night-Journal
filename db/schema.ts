@@ -8,6 +8,7 @@ import {
   timestamp,
   date,
   boolean,
+  int,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
@@ -65,6 +66,10 @@ export const entryAttachments = mysqlTable("entry_attachments", {
   fileType: varchar("file_type", { length: 50 }).notNull(),
   fileName: varchar("file_name", { length: 255 }).notNull(),
   storagePath: text("storage_path").notNull(),
+  // Derived 400 px preview; null for uploads made before thumbnails existed.
+  thumbStoragePath: text("thumb_storage_path"),
+  // Bytes on disk for the stored (compressed) image.
+  fileSize: int("file_size"),
   visionStatus: varchar("vision_status", { length: 20 }).default("pending").notNull(),
   visionSummary: text("vision_summary"),
   visionModelUsed: varchar("vision_model_used", { length: 100 }),

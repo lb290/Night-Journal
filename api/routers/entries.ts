@@ -49,6 +49,10 @@ export const entriesRouter = createRouter({
               fileType: z.string(),
               fileName: z.string(),
               storagePath: z.string(),
+              // Present for uploads made after compression was introduced;
+              // older clients simply omit them.
+              thumbStoragePath: z.string().nullish(),
+              fileSize: z.number().int().nonnegative().nullish(),
             }),
           )
           .optional(),

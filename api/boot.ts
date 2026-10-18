@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -8,7 +9,7 @@ import { env } from "./lib/env";
 import { authenticateRequest } from "./auth/session";
 import { createRegisterHandler, createLoginHandler } from "./auth/password";
 import { Paths } from "@contracts/constants";
-import { saveUploadedFile, getFilePath } from "./lib/upload";
+import { saveUploadedFile, getFilePath, THUMB_DIR_NAME } from "./lib/upload";
 import { startScheduler } from "./lib/scheduler";
 import fs from "fs";
 import path from "path";
@@ -44,7 +45,21 @@ app.post("/api/upload/file", async (c) => {
 });
 
 // ── Serve uploaded files ──
+// Two shapes are supported:
+//   /api/uploads/:userId/:fileName         full image (long edge ≤1600 px)
+//   /api/uploads/:userId/thumb/:fileName   400 px preview for lists
 app.get("/api/uploads/:userId/:fileName", async (c) => {
+  return serveUpload(c, c.req.param("fileName"));
+});
+
+app.get("/api/uploads/:userId/thumb/:fileName", async (c) => {
+  return serveUpload(c, `${THUMB_DIR_NAME}/${c.req.param("fileName")}`);
+});
+
+async function serveUpload(
+  c: Context<{ Bindings: HttpBindings }>,
+  relativeName: string,
+) {
   let user;
   try {
     user = await authenticateRequest(c.req.raw.headers);
@@ -57,12 +72,15 @@ app.get("/api/uploads/:userId/:fileName", async (c) => {
     return c.json({ error: "Forbidden" }, 403);
   }
 
-  const fileName = c.req.param("fileName");
-  if (!fileName || fileName.includes("..") || fileName.includes("/") || fileName.includes("\\")) {
+  if (
+    !relativeName ||
+    relativeName.includes("..") ||
+    relativeName.includes("\\")
+  ) {
     return c.json({ error: "Invalid file name" }, 400);
   }
 
-  const storagePath = `${userIdParam}/${fileName}`;
+  const storagePath = `${userIdParam}/${relativeName}`;
   const fullPath = getFilePath(storagePath);
   if (!fullPath) return c.json({ error: "Not Found" }, 404);
 
@@ -86,7 +104,7 @@ app.get("/api/uploads/:userId/:fileName", async (c) => {
       "Cache-Control": "public, max-age=31536000, immutable",
     },
   });
-});
+}
 
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({

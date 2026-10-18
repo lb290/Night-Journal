@@ -31,6 +31,7 @@ interface Fragment {
   attachments?: Array<{
     id: number;
     fileUrl: string;
+    thumbStoragePath?: string | null;
     visionSummary: string | null;
   }>;
 }
@@ -76,6 +77,7 @@ function mapEntriesToFragments(
     attachments?: Array<{
       id: number;
       fileUrl: string;
+      thumbStoragePath?: string | null;
       visionSummary: string | null;
     }>;
   }>,
@@ -261,12 +263,17 @@ function SourceFragments({ fragments }: { fragments: Fragment[] }) {
                     className="flex items-center gap-3 rounded-xl px-4 py-3"
                     style={{ backgroundColor: "var(--bg-surface)" }}
                   >
-                    {/* Thumbnail if image */}
+                    {/* Thumbnail if image — a 48 px square has no business
+                        downloading the full-resolution photo. */}
                     {fragment.hasImages &&
                     fragment.attachments &&
                     fragment.attachments[0]?.fileUrl ? (
                       <img
-                        src={fragment.attachments[0].fileUrl}
+                        src={
+                          fragment.attachments[0].thumbStoragePath
+                            ? `/api/uploads/${fragment.attachments[0].thumbStoragePath}`
+                            : fragment.attachments[0].fileUrl
+                        }
                         alt=""
                         className="h-12 w-12 flex-shrink-0 rounded-lg object-cover"
                       />

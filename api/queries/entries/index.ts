@@ -2,6 +2,7 @@ import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { getDb } from "../connection";
 import { entries, entryAttachments } from "@db/schema";
 import { monthRange, toDateColumnValue } from "../../lib/date";
+import { deleteStoredFiles } from "../../lib/upload";
 
 // ─── Entries ───────────────────────────────────────────────────────
 
@@ -134,8 +135,35 @@ export async function findEntriesByMonth(userId: number, year: number, month: nu
   return userEntries;
 }
 
+/**
+ * Soft-delete an entry and drop its image files from disk.
+ *
+ * The row is kept (`deletedAt`) so the deletion is reversible at the data
+ * level, but the uploaded photos are removed: nothing in the app can restore a
+ * deleted entry, so keeping multi-megabyte files around forever only grows the
+ * upload directory. Files are only unlinked after the row update succeeds.
+ */
 export async function softDeleteEntry(userId: number, entryId: number) {
-  await getDb()
+  const db = getDb();
+
+  // Read the attachment paths *before* updating, scoped to this user so a
+  // crafted entryId can never reach another user's files.
+  const attachments = await db
+    .select({
+      storagePath: entryAttachments.storagePath,
+      thumbStoragePath: entryAttachments.thumbStoragePath,
+    })
+    .from(entryAttachments)
+    .innerJoin(entries, eq(entryAttachments.entryId, entries.id))
+    .where(
+      and(
+        eq(entryAttachments.entryId, entryId),
+        eq(entries.userId, userId),
+        isNull(entries.deletedAt),
+      ),
+    );
+
+  await db
     .update(entries)
     .set({ deletedAt: new Date() })
     .where(
@@ -145,6 +173,10 @@ export async function softDeleteEntry(userId: number, entryId: number) {
         isNull(entries.deletedAt),
       ),
     );
+
+  for (const att of attachments) {
+    deleteStoredFiles(att.storagePath, att.thumbStoragePath);
+  }
 }
 
 // ─── Entry Attachments ─────────────────────────────────────────────
@@ -158,16 +190,21 @@ export async function findAttachmentsByEntryId(entryId: number) {
 
 function isValidStoragePath(userId: number, storagePath: string): boolean {
   // Prevent path traversal and cross-user access
-  // storagePath must be exactly: "<userId>/<fileName>"
+  // storagePath must be either "<userId>/<fileName>" or
+  // "<userId>/thumb/<fileName>" (derived previews live in a subfolder).
   if (storagePath.includes("..") || storagePath.includes("\\")) {
     return false;
   }
   if (storagePath.startsWith("/")) return false;
   const parts = storagePath.split("/");
-  if (parts.length !== 2) return false;
-  const [first, second] = parts;
+  if (parts.length !== 2 && parts.length !== 3) return false;
+  const [first, second, third] = parts;
   if (first !== String(userId)) return false;
   if (!second || second.includes("/") || second.includes("\\")) return false;
+  if (parts.length === 3) {
+    if (second !== "thumb") return false;
+    if (!third || third.includes("/") || third.includes("\\")) return false;
+  }
   return true;
 }
 
@@ -184,7 +221,14 @@ function isValidAttachmentFileUrl(
 export async function createAttachment(
   userId: number,
   entryId: number,
-  data: { fileUrl: string; fileType: string; fileName: string; storagePath: string },
+  data: {
+    fileUrl: string;
+    fileType: string;
+    fileName: string;
+    storagePath: string;
+    thumbStoragePath?: string | null;
+    fileSize?: number | null;
+  },
 ) {
   if (!isValidStoragePath(userId, data.storagePath)) {
     throw new Error("Invalid attachment storage path");
@@ -194,6 +238,17 @@ export async function createAttachment(
   }
   if (data.fileName.includes("..") || data.fileName.includes("/") || data.fileName.includes("\\")) {
     throw new Error("Invalid attachment file name");
+  }
+  if (data.thumbStoragePath) {
+    if (!isValidStoragePath(userId, data.thumbStoragePath)) {
+      throw new Error("Invalid thumbnail storage path");
+    }
+    // The thumbnail must sit next to its image, not anywhere else in the tree
+    const thumbName = data.thumbStoragePath.split("/")[2];
+    const mainName = data.storagePath.split("/").pop();
+    if (thumbName !== mainName) {
+      throw new Error("Thumbnail does not match attachment");
+    }
   }
 
   const db = getDb();
@@ -206,6 +261,8 @@ export async function createAttachment(
       fileType: data.fileType,
       fileName: data.fileName,
       storagePath: data.storagePath,
+      thumbStoragePath: data.thumbStoragePath ?? null,
+      fileSize: data.fileSize ?? null,
     })
     .$returningId();
 

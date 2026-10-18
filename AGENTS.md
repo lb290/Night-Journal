@@ -107,9 +107,9 @@
 - **部署方式**: 两种 —— 服务器 `docker compose up -d --build`（自动建表）；本机直跑 `./scripts/nj-local.sh restart`。完整说明见 `DEPLOYMENT.md`
 - **模型通道**: 写日记/视觉模型支持 OpenAI 兼容端点与第一方 WorkBuddy 通道（`aiSettings.diaryProvider`）；内网/回环地址默认被 SSRF 防护拦截，需用 `ALLOW_PRIVATE_MODEL_HOSTS` 显式放行
 - **时区**: `DATE` 列按 `YYYY-MM-DD` 字符串绑定、`TIMESTAMP` 由连接层固定按 UTC 读写，非 UTC 主机不再错位（`api/lib/date.ts`、`api/queries/connection.ts`）
-- **图片**: 上传落本地磁盘（`data/uploads/`，单文件 ≤10MB），通过 `/api/uploads/<userId>/<file>` 鉴权读取；OSS/S3 仍未接
+- **图片**: 上传落本地磁盘（`data/uploads/`，单文件 ≤10MB）。上传即压缩：长边 ≤1600px、剥离 EXIF（含 GPS）、统一转 JPEG，另生成 400px 缩略图（`<uid>/thumb/`）—— 8.8MB 手机原图 → ~140KB 主图 + 11KB 缩略图。HEIC 用 `heic-convert` 兜底解码（sharp 自带 libheif 不含 HEVC 解码器）。`/api/uploads/<userId>/<file>` 与 `/api/uploads/<userId>/thumb/<file>` 均需鉴权；删除碎片时同步清理磁盘文件。历史图片用 `scripts/nj-compress-backfill.mjs` 回填。OSS/S3 仍未接
 - **Dream 记忆机制**: 日记生成后异步提炼用户画像（人格/关系/情绪/语风）+ 短期记忆（14 天衰减），注入后续日记 prompt 提供连续性。Settings「记忆」tab 可只读+删除，`aiSettings.enableDream` 开关控制
-- **测试状态**: vitest 17 个文件 / 123 passed | 3 skipped，覆盖认证/JWT/env、日期与时区、模型分发与 WorkBuddy、diaries/entries/memories 路由、日记与 Dream 响应解析
+- **测试状态**: vitest 20 个文件 / 143 passed | 3 skipped，覆盖认证/JWT/env、日期与时区、模型分发与 WorkBuddy、diaries/entries/memories 路由、日记与 Dream 响应解析、图片压缩与删除清理
 
 ---
 
@@ -174,7 +174,8 @@ Night-Journal/
 │   │   ├── openai.ts          # 对话与视觉调用
 │   │   ├── workbuddy/         # 第一方 WorkBuddy 通道：auth / chat / credential / product
 │   │   ├── url-guard.ts       # SSRF 防护（内网、回环默认拦截）
-│   │   ├── upload.ts          # 图片落盘 data/uploads，单文件 ≤10MB
+│   │   ├── upload.ts          # 图片落盘 data/uploads（压缩 + 缩略图 + 删除清理），单文件 ≤10MB
+│   │   ├── image.ts           # 压缩流水线：resize 1600px / 剥 EXIF / 转 JPEG / 生成 400px 缩略图 / HEIC 兜底
 │   │   ├── scheduler.ts       # 每 60s：自动生成「昨天」的日记 + 记忆过期清理
 │   │   └── vite.ts            # 生产模式静态托管 + SPA 回退
 │   ├── queries/               # Drizzle 查询层
@@ -201,6 +202,7 @@ Night-Journal/
 │   ├── types.ts               # 共享类型
 │   └── errors.ts              # 错误码
 ├── scripts/nj-local.sh        # 本机一键启停：start / stop / restart / run / status / logs / build / migrate
+├── scripts/nj-compress-backfill.mjs  # 历史图片压缩回填（默认 dry run，--apply 执行）
 ├── DEPLOYMENT.md              # 部署与运维指南（本机 + Docker + 排错 + 分支维护）
 ├── entrypoint.sh              # 容器启动脚本：drizzle-kit push → node dist/boot.js
 ├── Dockerfile                 # 多阶段构建：builder → runner (node:22-alpine)
@@ -246,7 +248,7 @@ POST /api/auth/login  { username, password }
 
 - `users`: 账号密码（`username` / `passwordHash`）+ `unionId`（本地账号为 `local:<username>`），`role` 区分 user/admin
 - `entries`: 碎片正文 + 情绪，`entryDate` 是 DATE 列（按字符串绑定），`hasImages` 标记有附件，`deletedAt` 软删除，`includedInDiary` 标记已写入日记
-- `entryAttachments`: 附件，`fileUrl` 为读取地址（`/api/uploads/...`），`storagePath` 为磁盘相对路径，`visionSummary` / `visionStatus` 存视觉识别结果
+- `entryAttachments`: 附件，`fileUrl` 为读取地址（`/api/uploads/...`），`storagePath` 为磁盘相对路径，`thumbStoragePath` 为 400px 缩略图路径（`<uid>/thumb/<file>`，历史数据为 null 时前端回退到原图），`fileSize` 为压缩后字节数，`visionSummary` / `visionStatus` 存视觉识别结果
 - `diaries`: 一人一天一篇（`userId` + `diaryDate`），`generationStatus: pending/generated/failed`，`generationError` 是给用户看的脱敏错误，`manuallyEdited` 阻止自动覆盖
 - `diaryVersions`: 每次 regenerate 前快照旧内容
 - `aiSettings`: 每人一行。模型地址/模型名/提示词/风格/长度/`timezone`/`diaryGenerationTime`；`visionApiKey`、`diaryApiKey`、`diaryWorkbuddyCredential` 一律 **AES-256-GCM 加密存储**；`diaryProvider` 选 OpenAI 兼容或 WorkBuddy；`enableDream` 控制记忆机制

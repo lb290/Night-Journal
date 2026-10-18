@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { nanoid } from "nanoid";
+import { processImage } from "./image";
 
 const UPLOAD_DIR = path.resolve(
   process.cwd(),
@@ -37,6 +38,9 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/heif": ".heif",
 };
 
+/** Subdirectory (inside each user's folder) that holds thumbnails. */
+export const THUMB_DIR_NAME = "thumb";
+
 export function getUploadDir(): string {
   return UPLOAD_DIR;
 }
@@ -45,6 +49,12 @@ export function ensureUploadDir(userId: number): string {
   const userDir = path.join(UPLOAD_DIR, String(userId));
   fs.mkdirSync(userDir, { recursive: true });
   return userDir;
+}
+
+function ensureThumbDir(userId: number): string {
+  const dir = path.join(UPLOAD_DIR, String(userId), THUMB_DIR_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function validateFileName(name: string): void {
@@ -91,25 +101,94 @@ export function validateUploadedFile(file: File): {
   );
 }
 
+export interface SavedUpload {
+  fileName: string;
+  /** Path relative to the upload dir, e.g. "3/1792...-abc.jpg". */
+  storagePath: string;
+  /** Authenticated read URL for the stored image. */
+  fileUrl: string;
+  /** Stored MIME type after normalisation. */
+  fileType: string;
+  /** Bytes on disk for the stored image. */
+  fileSize: number;
+  /** Bytes the client originally sent, before compression. */
+  originalSize: number;
+  /** Thumbnail path, when a thumbnail was produced. */
+  thumbStoragePath: string | null;
+  thumbFileUrl: string | null;
+}
+
+/**
+ * Persist an uploaded image.
+ *
+ * The file is normalised on the way in (see `api/lib/image.ts`): long edge
+ * capped at 1600 px, EXIF stripped, JPEG re-encoded, plus a 400 px thumbnail.
+ * An 8.8 MB phone photo lands on disk as ~200 KB and a ~15 KB thumbnail.
+ *
+ * GIFs are stored untouched — re-encoding would flatten the animation — but
+ * still get a thumbnail from the first frame. Anything sharp cannot decode
+ * falls back to the original bytes so a strange image never blocks an entry.
+ */
 export async function saveUploadedFile(
   userId: number,
   file: File,
-): Promise<{ fileName: string; storagePath: string; fileUrl: string }> {
-  const { ext } = validateUploadedFile(file);
+): Promise<SavedUpload> {
+  const { ext, type } = validateUploadedFile(file);
   const userDir = ensureUploadDir(userId);
-  const safeName = `${Date.now()}-${nanoid(8)}${ext}`;
-  const storagePath = `${userId}/${safeName}`;
-  const fullPath = path.join(userDir, safeName);
+  const buffer = Buffer.from(await file.arrayBuffer());
 
+  const baseName = `${Date.now()}-${nanoid(8)}`;
+  const originalSize = buffer.length;
+
+  const isAnimatedGif = type === "image/gif";
+  const processed = isAnimatedGif
+    ? null
+    : await processImage(buffer, file.name || "", type);
+
+  if (processed) {
+    const safeName = `${baseName}.jpg`;
+    validateFileName(safeName);
+
+    const fullPath = path.join(userDir, safeName);
+    const thumbDir = ensureThumbDir(userId);
+    const thumbFullPath = path.join(thumbDir, safeName);
+
+    fs.writeFileSync(fullPath, processed.main);
+    fs.writeFileSync(thumbFullPath, processed.thumbnail);
+
+    const storagePath = `${userId}/${safeName}`;
+    const thumbStoragePath = `${userId}/${THUMB_DIR_NAME}/${safeName}`;
+
+    return {
+      fileName: file.name,
+      storagePath,
+      fileUrl: `/api/uploads/${storagePath}`,
+      fileType: "image/jpeg",
+      fileSize: processed.main.length,
+      originalSize,
+      thumbStoragePath,
+      thumbFileUrl: `/api/uploads/${thumbStoragePath}`,
+    };
+  }
+
+  // Fallback: keep the bytes as-is (GIF, or an image sharp could not decode)
+  const safeName = `${baseName}${ext}`;
   validateFileName(safeName);
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const fullPath = path.join(userDir, safeName);
   fs.writeFileSync(fullPath, buffer);
+
+  const storagePath = `${userId}/${safeName}`;
 
   return {
     fileName: file.name,
     storagePath,
     fileUrl: `/api/uploads/${storagePath}`,
+    fileType: type,
+    fileSize: buffer.length,
+    originalSize,
+    thumbStoragePath: null,
+    thumbFileUrl: null,
   };
 }
 
@@ -127,6 +206,29 @@ export function getFilePath(storagePath: string): string | null {
     return null;
   }
   return full;
+}
+
+/**
+ * Remove a stored image and its thumbnail.
+ *
+ * Soft-deleting an entry used to leave the files behind forever — every deleted
+ * photo stayed on disk. Paths are validated through `getFilePath`, so a crafted
+ * value can never reach outside the upload directory.
+ */
+export function deleteStoredFiles(
+  storagePath: string | null | undefined,
+  thumbStoragePath?: string | null,
+): void {
+  for (const candidate of [storagePath, thumbStoragePath]) {
+    if (!candidate) continue;
+    const full = getFilePath(candidate);
+    if (!full) continue;
+    try {
+      fs.unlinkSync(full);
+    } catch (err) {
+      console.error(`[upload] Failed to delete ${candidate}:`, err);
+    }
+  }
 }
 
 export function readFileAsBase64(storagePath: string): string | null {
