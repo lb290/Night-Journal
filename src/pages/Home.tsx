@@ -16,6 +16,7 @@ import {
   Loader2,
   Check,
   AlertTriangle,
+  RotateCcw,
   Pencil,
   Trash2,
   ChevronDown,
@@ -162,7 +163,13 @@ function MoodTag({ moodKey }: { moodKey: string }) {
 // Vision Status Badge
 // ──────────────────────────────────────────────────────────
 
-function VisionBadge({ meta }: { meta: AttachmentMeta }) {
+function VisionBadge({
+  meta,
+  onReanalyze,
+}: {
+  meta: AttachmentMeta
+  onReanalyze?: () => void
+}) {
   const [expanded, setExpanded] = useState(false)
 
   if (meta.visionStatus === 'completed' && meta.visionSummary) {
@@ -199,11 +206,22 @@ function VisionBadge({ meta }: { meta: AttachmentMeta }) {
             <p className="text-xs leading-relaxed text-white/90 pr-4">
               {meta.visionSummary}
             </p>
-            {meta.visionModelUsed && (
-              <p className="mt-1 text-[10px] text-white/40">
-                via {meta.visionModelUsed}
-              </p>
-            )}
+            <div className="mt-2 flex items-center justify-between gap-2">
+              {meta.visionModelUsed ? (
+                <p className="text-[10px] text-white/40">via {meta.visionModelUsed}</p>
+              ) : (
+                <span />
+              )}
+              {onReanalyze && (
+                <button
+                  onClick={onReanalyze}
+                  className="flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-medium text-white/85 active:scale-95"
+                >
+                  <RotateCcw size={10} strokeWidth={2.5} />
+                  重新分析
+                </button>
+              )}
+            </div>
           </div>
         )}
       </>
@@ -212,17 +230,22 @@ function VisionBadge({ meta }: { meta: AttachmentMeta }) {
 
   if (meta.visionStatus === 'failed') {
     return (
-      <div
-        className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full"
+      <button
+        onClick={onReanalyze}
+        disabled={!onReanalyze}
+        className="absolute right-2 top-2 z-10 flex h-6 items-center gap-1 rounded-full px-2 disabled:opacity-80"
         style={{
           backgroundColor: 'rgba(239, 68, 68, 0.85)',
           backdropFilter: 'blur(4px)',
           boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
         }}
-        title="图片分析失败"
+        title={onReanalyze ? '图片分析失败 — 点击重新分析' : '图片分析失败'}
       >
         <AlertTriangle size={12} strokeWidth={2.5} color="#fff" />
-      </div>
+        {onReanalyze && (
+          <span className="text-[10px] font-medium text-white/90">重试</span>
+        )}
+      </button>
     )
   }
 
@@ -281,12 +304,14 @@ function FragmentCard({
   canEdit,
   onEdit,
   onDelete,
+  onReanalyze,
 }: {
   fragment: Fragment
   index: number
   canEdit?: boolean
   onEdit?: (fragment: Fragment) => void
   onDelete?: (fragment: Fragment) => void
+  onReanalyze?: (fragment: Fragment) => void
 }) {
   return (
     <motion.div
@@ -346,24 +371,46 @@ function FragmentCard({
       {/* Images */}
       {fragment.images && fragment.images.length > 0 && (
         <div
-          className={`mt-3 grid gap-2 ${fragment.images.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}
+          className={
+            fragment.images.length === 1
+              ? 'mt-3'
+              : 'mt-3 grid grid-cols-2 gap-2'
+          }
         >
-          {fragment.images.map((img, i) => (
-            <motion.div
-              key={i}
-              initial={{ scale: 1.02 }}
-              animate={{ scale: 1 }}
-              transition={{ duration: 0.2 }}
-              className={`group relative overflow-hidden rounded-xl ${fragment.images!.length === 1 ? 'aspect-[4/3]' : 'aspect-square'}`}
-            >
-              <img
-                src={img}
-                alt={`图片 ${i + 1}`}
-                className="h-full w-full object-cover"
-              />
-                {fragment.attachmentMetas?.[i] && <VisionBadge meta={fragment.attachmentMetas[i]} />}
-            </motion.div>
-          ))}
+          {fragment.images.map((img, i) => {
+            const single = fragment.images!.length === 1
+            return (
+              <motion.div
+                key={i}
+                initial={{ scale: 1.02 }}
+                animate={{ scale: 1 }}
+                transition={{ duration: 0.2 }}
+                className={`group relative overflow-hidden rounded-xl ${single ? '' : 'aspect-square'}`}
+                style={{ backgroundColor: 'var(--bg-elevated)' }}
+              >
+                {/* Single image keeps its natural aspect ratio so nothing is
+                    cropped; grid thumbs letterbox instead of cropping. */}
+                <img
+                  src={img}
+                  alt={`图片 ${i + 1}`}
+                  loading="lazy"
+                  className={
+                    single
+                      ? 'block h-auto max-h-[70vh] w-full object-contain'
+                      : 'h-full w-full object-contain'
+                  }
+                />
+                {fragment.attachmentMetas?.[i] && (
+                  <VisionBadge
+                    meta={fragment.attachmentMetas[i]}
+                    onReanalyze={
+                      onReanalyze ? () => onReanalyze(fragment) : undefined
+                    }
+                  />
+                )}
+              </motion.div>
+            )
+          })}
         </div>
       )}
     </motion.div>
@@ -1027,6 +1074,23 @@ export default function Home() {
     },
   })
 
+  // Re-run image understanding for an entry. Vision only runs on upload, so
+  // anything that failed (or predates a vision model being configured) has no
+  // other way back.
+  const reanalyzeVision = trpc.entries.reanalyzeVision.useMutation({
+    onSuccess: (res) => {
+      utils.entries.list.invalidate({ date: activeDate })
+      toast.success(res.count > 1 ? `已开始重新分析（${res.count} 张）` : '已开始重新分析图片')
+    },
+    onError: (err) => {
+      console.error('[Home] Failed to reanalyze vision')
+      const msg = err.message?.includes('not configured')
+        ? '请先在「设置 → 图片理解」配置视觉模型'
+        : err.message || '重新分析失败'
+      toast.error(msg)
+    },
+  })
+
   const isToday = activeDate === getTodayDateString()
 
   // Convert server entries to the local Fragment type for rendering
@@ -1236,6 +1300,7 @@ export default function Home() {
                   canEdit={isToday}
                   onEdit={handleOpenEdit}
                   onDelete={handleDelete}
+                  onReanalyze={(f) => reanalyzeVision.mutate({ entryId: Number(f.id) })}
                 />
               ))}
             </AnimatePresence>

@@ -119,7 +119,7 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
         今日图片
       </h3>
       <div
-        className="no-scrollbar mt-4 flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2"
+        className="no-scrollbar mt-4 flex items-start gap-3 overflow-x-auto snap-x snap-mandatory pb-2"
         style={{ paddingRight: 20 }}
         role="region"
         aria-label="今日图片"
@@ -128,7 +128,7 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
           <motion.div
             key={photo.id}
             className="relative flex-shrink-0 snap-start overflow-hidden rounded-xl"
-            style={{ width: 280, aspectRatio: "4/3" }}
+            style={{ width: 280, backgroundColor: "var(--bg-elevated)" }}
             initial={{ opacity: 0, x: 40 }}
             whileInView={{ opacity: 1, x: 0 }}
             viewport={{ once: true }}
@@ -138,10 +138,12 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
               ease: EASE_PRIMARY,
             }}
           >
+            {/* Natural aspect ratio — a fixed 4:3 frame with object-cover
+                silently cropped portrait photos (phone shots are usually 3:4). */}
             <img
               src={photo.fileUrl}
               alt={photo.visionSummary ?? "图片"}
-              className="h-full w-full object-cover"
+              className="block h-auto max-h-[70vh] w-full object-contain"
               loading="lazy"
             />
             {/* Gradient overlay */}

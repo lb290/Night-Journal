@@ -4,10 +4,13 @@ import { createRouter, authedQuery } from "../middleware";
 import {
   findEntriesByDate,
   findEntriesByMonth,
+  findEntryById,
   createEntry,
   updateEntry,
   softDeleteEntry,
   createAttachment,
+  updateAttachmentVision,
+  findAttachmentsByEntryId,
 } from "../queries/entries";
 import { findAiSettingsByUserId } from "../queries/ai-settings";
 import { callVisionModel } from "../lib/openai";
@@ -104,11 +107,59 @@ export const entriesRouter = createRouter({
       await softDeleteEntry(ctx.user.id, input.id);
       return { success: true };
     }),
+
+  /**
+   * Re-run image understanding for an entry's attachments.
+   *
+   * Vision analysis only runs when an attachment is uploaded, so an image
+   * whose analysis failed — or that was uploaded before a vision model was
+   * configured — has no way back. This exposes the same pass on demand.
+   */
+  reanalyzeVision: authedQuery
+    .input(z.object({ entryId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const entry = await findEntryById(ctx.user.id, input.entryId);
+      if (!entry) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entry not found" });
+      }
+
+      const attachments = await findAttachmentsByEntryId(entry.id);
+      if (attachments.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This entry has no images",
+        });
+      }
+
+      // Check up front so the user gets a clear reason instead of a silent
+      // `failed` badge a few seconds later.
+      const settings = await findAiSettingsByUserId(ctx.user.id);
+      if (
+        !settings ||
+        !settings.enableImageUnderstanding ||
+        !settings.visionApiKey ||
+        !settings.visionApiBaseUrl
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Vision model not configured. Please set it up in Settings.",
+        });
+      }
+
+      // Show the in-progress state immediately; the pass itself is fire-and-forget.
+      for (const att of attachments) {
+        await updateAttachmentVision(att.id, { visionStatus: "pending" });
+      }
+
+      triggerVisionAnalysis(ctx.user.id, entry.id, entry.contentText).catch((err) => {
+        console.error("[vision] re-analysis failed:", err);
+      });
+
+      return { success: true, count: attachments.length };
+    }),
 });
 
 // ── Vision analysis (fire-and-forget) ──────────────────────────────
-
-import { updateAttachmentVision, findAttachmentsByEntryId } from "../queries/entries";
 
 async function triggerVisionAnalysis(
   userId: number,
