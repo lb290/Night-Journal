@@ -17,6 +17,7 @@ import { format, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { Drawer } from "vaul";
 import { toast } from "sonner";
+import { ImageViewer, type ViewerImage } from "@/components/ImageViewer";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -104,6 +105,24 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
     .flatMap((f) => f.attachments!)
     .filter((a) => a.fileUrl);
 
+  // The gallery owns its viewer: every photo on screen is already in `photos`,
+  // so the viewer can page through the whole set without prop plumbing.
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  const viewerImages = useMemo<ViewerImage[]>(
+    () =>
+      photos.map((photo) => ({
+        src: photo.fileUrl,
+        previewSrc: photo.thumbStoragePath
+          ? `/api/uploads/${photo.thumbStoragePath}`
+          : undefined,
+        alt: photo.visionSummary ?? "图片",
+        caption: photo.visionSummary ?? undefined,
+      })),
+    [photos],
+  );
+
   if (photos.length === 0) return null;
 
   return (
@@ -119,6 +138,14 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
         style={{ color: "var(--text-primary)" }}
       >
         今日图片
+        {photos.length > 1 && (
+          <span
+            className="ml-2 font-ui text-xs"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            {photos.length} 张
+          </span>
+        )}
       </h3>
       <div
         className="no-scrollbar mt-4 flex items-start gap-3 overflow-x-auto snap-x snap-mandatory pb-2"
@@ -141,13 +168,24 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
             }}
           >
             {/* Natural aspect ratio — a fixed 4:3 frame with object-cover
-                silently cropped portrait photos (phone shots are usually 3:4). */}
-            <img
-              src={photo.fileUrl}
-              alt={photo.visionSummary ?? "图片"}
-              className="block h-auto max-h-[70vh] w-full object-contain"
-              loading="lazy"
-            />
+                silently cropped portrait photos (phone shots are usually 3:4).
+                Tapping opens the full-screen viewer. */}
+            <button
+              type="button"
+              onClick={() => {
+                setViewerIndex(i);
+                setViewerOpen(true);
+              }}
+              className="block w-full cursor-zoom-in"
+              aria-label={`查看图片 ${i + 1}（共 ${photos.length} 张）`}
+            >
+              <img
+                src={photo.fileUrl}
+                alt={photo.visionSummary ?? "图片"}
+                className="block h-auto max-h-[70vh] w-full object-contain"
+                loading="lazy"
+              />
+            </button>
             {/* Gradient overlay */}
             <div
               className="absolute bottom-0 left-0 right-0 h-10"
@@ -167,6 +205,13 @@ function PhotoGallery({ fragments }: { fragments: Fragment[] }) {
           </motion.div>
         ))}
       </div>
+
+      <ImageViewer
+        open={viewerOpen}
+        images={viewerImages}
+        initialIndex={viewerIndex}
+        onClose={() => setViewerOpen(false)}
+      />
     </motion.section>
   );
 }
@@ -201,6 +246,26 @@ function MoodDot({ mood }: { mood: string | null }) {
 
 function SourceFragments({ fragments }: { fragments: Fragment[] }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Tapping a fragment's thumbnail opens every photo of that fragment.
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerImages, setViewerImages] = useState<ViewerImage[]>([]);
+
+  const openFragment = (fragment: Fragment) => {
+    const attachments = (fragment.attachments ?? []).filter((a) => a.fileUrl);
+    if (attachments.length === 0) return;
+    setViewerImages(
+      attachments.map((a) => ({
+        src: a.fileUrl,
+        previewSrc: a.thumbStoragePath
+          ? `/api/uploads/${a.thumbStoragePath}`
+          : undefined,
+        alt: a.visionSummary ?? "图片",
+        caption: a.visionSummary ?? undefined,
+      })),
+    );
+    setViewerOpen(true);
+  };
 
   if (fragments.length === 0) return null;
 
@@ -264,19 +329,36 @@ function SourceFragments({ fragments }: { fragments: Fragment[] }) {
                     style={{ backgroundColor: "var(--bg-surface)" }}
                   >
                     {/* Thumbnail if image — a 48 px square has no business
-                        downloading the full-resolution photo. */}
+                        downloading the full-resolution photo. Tapping it opens
+                        the fragment's photos in the viewer. */}
                     {fragment.hasImages &&
                     fragment.attachments &&
                     fragment.attachments[0]?.fileUrl ? (
-                      <img
-                        src={
-                          fragment.attachments[0].thumbStoragePath
-                            ? `/api/uploads/${fragment.attachments[0].thumbStoragePath}`
-                            : fragment.attachments[0].fileUrl
-                        }
-                        alt=""
-                        className="h-12 w-12 flex-shrink-0 rounded-lg object-cover"
-                      />
+                      <button
+                        type="button"
+                        onClick={() => openFragment(fragment)}
+                        className="relative flex-shrink-0 cursor-zoom-in"
+                        aria-label={`查看这条记录的图片（共 ${fragment.attachments.length} 张）`}
+                      >
+                        <img
+                          src={
+                            fragment.attachments[0].thumbStoragePath
+                              ? `/api/uploads/${fragment.attachments[0].thumbStoragePath}`
+                              : fragment.attachments[0].fileUrl
+                          }
+                          alt=""
+                          className="h-12 w-12 rounded-lg object-cover"
+                        />
+                        {fragment.attachments.length > 1 && (
+                          <span
+                            className="absolute -bottom-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 font-ui text-[10px] text-white"
+                            style={{ backgroundColor: "var(--accent)" }}
+                            aria-hidden="true"
+                          >
+                            {fragment.attachments.length}
+                          </span>
+                        )}
+                      </button>
                     ) : (
                       <MoodDot mood={fragment.moodLabel} />
                     )}
@@ -301,6 +383,13 @@ function SourceFragments({ fragments }: { fragments: Fragment[] }) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ImageViewer
+        open={viewerOpen}
+        images={viewerImages}
+        initialIndex={0}
+        onClose={() => setViewerOpen(false)}
+      />
     </section>
   );
 }

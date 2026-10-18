@@ -28,6 +28,7 @@ import { useKeyboardHeight } from '@/hooks/useKeyboardHeight'
 import { useSearchParams } from 'react-router'
 import { Calendar } from '@/components/ui/calendar'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ImageViewer, type ViewerImage } from '@/components/ImageViewer'
 import { format, parseISO } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 
@@ -309,6 +310,7 @@ function FragmentCard({
   onEdit,
   onDelete,
   onReanalyze,
+  onOpenImage,
 }: {
   fragment: Fragment
   index: number
@@ -316,6 +318,8 @@ function FragmentCard({
   onEdit?: (fragment: Fragment) => void
   onDelete?: (fragment: Fragment) => void
   onReanalyze?: (fragment: Fragment) => void
+  /** Opens the full-screen viewer at the tapped image. */
+  onOpenImage?: (fragment: Fragment, imageIndex: number) => void
 }) {
   return (
     <motion.div
@@ -399,17 +403,25 @@ function FragmentCard({
                 style={{ backgroundColor: 'var(--bg-elevated)' }}
               >
                 {/* Single image keeps its natural aspect ratio so nothing is
-                    cropped; grid thumbs letterbox instead of cropping. */}
-                <img
-                  src={src}
-                  alt={`图片 ${i + 1}`}
-                  loading="lazy"
-                  className={
-                    single
-                      ? 'block h-auto max-h-[70vh] w-full object-contain'
-                      : 'h-full w-full object-contain'
-                  }
-                />
+                    cropped; grid thumbs letterbox instead of cropping.
+                    Both open the full-screen viewer on tap. */}
+                <button
+                  type="button"
+                  onClick={() => onOpenImage?.(fragment, i)}
+                  className="block h-full w-full cursor-zoom-in"
+                  aria-label={`查看图片 ${i + 1}（共 ${fragment.images!.length} 张）`}
+                >
+                  <img
+                    src={src}
+                    alt={`图片 ${i + 1}`}
+                    loading="lazy"
+                    className={
+                      single
+                        ? 'block h-auto max-h-[70vh] w-full object-contain'
+                        : 'h-full w-full object-contain'
+                    }
+                  />
+                </button>
                 {fragment.attachmentMetas?.[i] && (
                   <VisionBadge
                     meta={fragment.attachmentMetas[i]}
@@ -417,6 +429,15 @@ function FragmentCard({
                       onReanalyze ? () => onReanalyze(fragment) : undefined
                     }
                   />
+                )}
+                {/* Multi-image badge so the grid count is obvious at a glance */}
+                {!single && i === 0 && (
+                  <span
+                    className="pointer-events-none absolute left-2 top-2 rounded-full bg-black/50 px-2 py-0.5 font-ui text-[11px] text-white/90 backdrop-blur-sm"
+                    aria-hidden="true"
+                  >
+                    {fragment.images!.length} 张
+                  </span>
                 )}
               </motion.div>
             )
@@ -1222,6 +1243,29 @@ export default function Home() {
     [deleteEntry],
   )
 
+  // ── Full-screen image viewer ──
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerImages, setViewerImages] = useState<ViewerImage[]>([])
+  const [viewerIndex, setViewerIndex] = useState(0)
+
+  // Plain function rather than useCallback: the setters are stable, the card
+  // list is not memoised, and manual memoisation here only fought the compiler.
+  const handleOpenImage = (fragment: Fragment, imageIndex: number) => {
+    const urls = fragment.images ?? []
+    if (urls.length === 0) return
+
+    setViewerImages(
+      urls.map((src, i) => ({
+        src,
+        previewSrc: fragment.thumbImages?.[i],
+        alt: `图片 ${i + 1}`,
+        caption: fragment.attachmentMetas?.[i]?.visionSummary,
+      })),
+    )
+    setViewerIndex(imageIndex)
+    setViewerOpen(true)
+  }
+
   const fragments = serverFragments
 
   return (
@@ -1322,6 +1366,7 @@ export default function Home() {
                   onEdit={handleOpenEdit}
                   onDelete={handleDelete}
                   onReanalyze={(f) => reanalyzeVision.mutate({ entryId: Number(f.id) })}
+                  onOpenImage={handleOpenImage}
                 />
               ))}
             </AnimatePresence>
@@ -1394,6 +1439,14 @@ export default function Home() {
         onClose={() => setDatePickerOpen(false)}
         selectedDate={activeDate}
         onSelect={(date) => setSearchParams({ date })}
+      />
+
+      {/* ── Full-screen Image Viewer ── */}
+      <ImageViewer
+        open={viewerOpen}
+        images={viewerImages}
+        initialIndex={viewerIndex}
+        onClose={() => setViewerOpen(false)}
       />
     </div>
   )

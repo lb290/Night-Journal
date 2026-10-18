@@ -15,6 +15,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["api/**/*.test.ts", "api/**/*.spec.ts"],
+    // api/ holds the backend; src/lib/ holds framework-free frontend helpers
+    // (gesture maths, formatting) that are worth testing without a DOM.
+    include: ["api/**/*.test.ts", "api/**/*.spec.ts", "src/lib/**/*.test.ts"],
   },
 });
