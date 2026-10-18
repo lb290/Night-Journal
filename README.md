@@ -18,7 +18,8 @@
     <a href="#简体中文">简体中文</a> ·
     <a href="#english">English</a> ·
     <a href="./AGENTS.md">AGENTS.md</a> ·
-    <a href="./CONTRIBUTING.md">CONTRIBUTING</a>
+    <a href="./CONTRIBUTING.md">CONTRIBUTING</a> ·
+    <a href="./DEPLOYMENT.md">部署指南</a>
   </p>
 </div>
 
@@ -73,6 +74,8 @@ docker compose up -d --build
 # 打开浏览器
 open http://localhost:3000
 ```
+
+> 不想用 Docker、想在本机直接跑（含一键重启脚本、日志、备份、排错清单），见 **[DEPLOYMENT.md](./DEPLOYMENT.md)**。
 
 容器启动时会自动完成：
 
